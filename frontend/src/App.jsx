@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
 import { noteApi } from './services/api.js'
+import { useAuth } from './context/AuthContext.jsx'
 
 function App() {
   const [notes, setNotes] = useState([])
@@ -11,6 +12,7 @@ function App() {
   const [error, setError] = useState('')
   const [modalError, setModalError] = useState('')
   const [loading, setLoading] = useState(true)
+  const { user, logout } = useAuth()
 
   const fetchNotes = async (search = '') => {
     try {
@@ -87,11 +89,29 @@ function App() {
     setModalError('')
   }
 
+  const handleLogout = async () => {
+    if (window.confirm('确定要退出登录吗？')) {
+      await logout()
+    }
+  }
+
   return (
     <div className="app">
       <header className="app-header">
-        <h1>📝 笔记管理</h1>
-        <p>记录你的想法，随时查看和编辑</p>
+        <div className="header-content">
+          <div className="header-title">
+            <h1>📝 笔记管理</h1>
+            <p>记录你的想法，随时查看和编辑</p>
+          </div>
+          <div className="user-info">
+            <span className="user-greeting">
+              👤 {user?.full_name || user?.username}
+            </span>
+            <button className="btn btn-logout" onClick={handleLogout}>
+              退出登录
+            </button>
+          </div>
+        </div>
       </header>
 
       {error && <div className="error-message">{error}</div>}
