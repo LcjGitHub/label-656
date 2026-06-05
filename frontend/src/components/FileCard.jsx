@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { fileApi } from '../services/api.js'
 
-function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload }) {
-  const [showMenu, setShowMenu] = useState(false)
+function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload, onError }) {
+  const [imageUrl, setImageUrl] = useState(null)
+  const [imageLoading, setImageLoading] = useState(false)
 
   const formatFileSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B'
@@ -41,6 +42,44 @@ function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload 
     return imageExts.includes(ext)
   }
 
+  const isDocumentPreviewable = (ext) => {
+    const previewableExts = ['txt', 'md', 'csv', 'xls', 'xlsx']
+    return previewableExts.includes(ext)
+  }
+
+  useEffect(() => {
+    let isMounted = true
+
+    if (isImage(file.file_extension)) {
+      loadImage()
+    }
+
+    return () => {
+      isMounted = false
+      if (imageUrl) {
+        URL.revokeObjectURL(imageUrl)
+      }
+    }
+  }, [file.id])
+
+  const loadImage = async () => {
+    try {
+      setImageLoading(true)
+      const response = await fileApi.getImageBlob(file.id)
+      if (response.data) {
+        const url = URL.createObjectURL(response.data)
+        setImageUrl(url)
+      }
+    } catch (err) {
+      console.error('加载图片失败:', err)
+      if (onError) {
+        onError(`加载图片 "${file.original_filename}" 失败`)
+      }
+    } finally {
+      setImageLoading(false)
+    }
+  }
+
   const handleDownload = async () => {
     try {
       const response = await fileApi.downloadFile(file.id)
@@ -55,12 +94,25 @@ function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload 
       onDownload && onDownload(file)
     } catch (err) {
       console.error('下载文件失败:', err)
+      if (onError) {
+        if (err.response && err.response.data && err.response.data.detail) {
+          onError(`下载失败: ${err.response.data.detail}`)
+        } else {
+          onError(`下载文件 "${file.original_filename}" 失败，请稍后重试`)
+        }
+      }
     }
   }
 
   const handleDelete = () => {
     if (window.confirm(`确定要删除文件 "${file.original_filename}" 吗？`)) {
       onDelete(file.id)
+    }
+  }
+
+  const handlePreviewClick = () => {
+    if (isImage(file.file_extension) || isDocumentPreviewable(file.file_extension)) {
+      onPreview(file)
     }
   }
 
@@ -75,20 +127,25 @@ function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload 
 
       <div
         className="file-preview"
-        onClick={() => isImage(file.file_extension) && onPreview(file)}
+        onClick={handlePreviewClick}
       >
-        {isImage(file.file_extension) ? (
+        {isImage(file.file_extension) && imageUrl ? (
           <img
-            src={fileApi.previewFile(file.id)}
+            src={imageUrl}
             alt={file.original_filename}
             onError={(e) => {
               e.target.style.display = 'none'
-              e.target.nextSibling.style.display = 'flex'
+              if (e.target.nextSibling) {
+                e.target.nextSibling.style.display = 'flex'
+              }
             }}
           />
         ) : null}
+        {isImage(file.file_extension) && imageLoading && (
+          <div className="file-loading">⏳</div>
+        )}
         <div
-          className={`file-icon-placeholder ${isImage(file.file_extension) ? 'hidden' : ''}`}
+          className={`file-icon-placeholder ${isImage(file.file_extension) && imageUrl ? 'hidden' : ''}`}
         >
           {getFileIcon(file.file_extension)}
         </div>
@@ -103,14 +160,19 @@ function FileCard({ file, isSelected, onSelect, onPreview, onDelete, onDownload 
           <span>•</span>
           <span>{formatDate(file.uploaded_at)}</span>
         </div>
+        {file.uploader_name && (
+          <div className="file-uploader">
+            👤 {file.uploader_name}
+          </div>
+        )}
       </div>
 
       <div className="file-actions">
-        {isImage(file.file_extension) && (
+        {(isImage(file.file_extension) || isDocumentPreviewable(file.file_extension)) && (
           <button
             className="btn-action"
             title="预览"
-            onClick={() => onPreview(file)}
+            onClick={handlePreviewClick}
           >
             👁️
           </button>

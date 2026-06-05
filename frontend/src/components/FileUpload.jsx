@@ -1,9 +1,26 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
-function FileUpload({ onFilesSelected, maxFiles = 10 }) {
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'txt', 'md', 'csv', 'zip', 'rar', '7z']
+
+function FileUpload({ onFilesSelected, maxFiles = 10, onError }) {
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState([])
+  const [validationErrors, setValidationErrors] = useState([])
   const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    if (validationErrors.length > 0 && onError) {
+      const errorMessage = validationErrors.join('；')
+      onError(errorMessage)
+      const timer = setTimeout(() => {
+        setValidationErrors([])
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [validationErrors])
 
   const handleDragOver = (e) => {
     e.preventDefault()
@@ -28,18 +45,54 @@ function FileUpload({ onFilesSelected, maxFiles = 10 }) {
     addFiles(files)
   }
 
-  const addFiles = (files) => {
-    const validFiles = files.filter(file => {
-      const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp',
-        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-        'txt', 'md', 'csv', 'zip', 'rar', '7z']
-      const ext = file.name.split('.').pop().toLowerCase()
-      return allowedExtensions.includes(ext)
-    })
+  const validateFile = (file) => {
+    const errors = []
+    const ext = file.name.split('.').pop().toLowerCase()
 
-    const newFiles = [...selectedFiles, ...validFiles].slice(0, maxFiles)
-    setSelectedFiles(newFiles)
-    onFilesSelected(newFiles)
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      errors.push(`文件 "${file.name}" 类型不支持，仅支持 ${ALLOWED_EXTENSIONS.join(', ')} 格式`)
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      errors.push(`文件 "${file.name}" 超过大小限制 (50MB)，当前大小 ${formatFileSize(file.size)}`)
+    }
+
+    return errors
+  }
+
+  const addFiles = (files) => {
+    const errors = []
+    const validFiles = []
+
+    for (const file of files) {
+      const fileErrors = validateFile(file)
+      if (fileErrors.length > 0) {
+        errors.push(...fileErrors)
+      } else {
+        validFiles.push(file)
+      }
+    }
+
+    if (errors.length > 0) {
+      setValidationErrors(errors)
+    }
+
+    if (validFiles.length > 0) {
+      const newFiles = [...selectedFiles, ...validFiles].slice(0, maxFiles)
+      setSelectedFiles(newFiles)
+      onFilesSelected(newFiles)
+
+      if (selectedFiles.length + validFiles.length > maxFiles) {
+        errors.push(`最多只能上传 ${maxFiles} 个文件，超出部分已被忽略`)
+        setValidationErrors(errors)
+      }
+    } else if (errors.length === 0) {
+      setValidationErrors(['没有可添加的有效文件'])
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
   }
 
   const removeFile = (index) => {
@@ -51,6 +104,7 @@ function FileUpload({ onFilesSelected, maxFiles = 10 }) {
   const clearFiles = () => {
     setSelectedFiles([])
     onFilesSelected([])
+    setValidationErrors([])
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -80,6 +134,16 @@ function FileUpload({ onFilesSelected, maxFiles = 10 }) {
 
   return (
     <div className="file-upload-container">
+      {validationErrors.length > 0 && (
+        <div className="upload-errors">
+          {validationErrors.map((error, index) => (
+            <div key={index} className="upload-error-item">
+              ⚠️ {error}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         className={`drop-zone ${isDragging ? 'dragging' : ''}`}
         onDragOver={handleDragOver}

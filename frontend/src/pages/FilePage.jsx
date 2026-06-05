@@ -242,24 +242,26 @@ function FilePage() {
         </button>
       </div>
 
-      {selectedFiles.size > 0 && (
-        <div className="batch-actions">
-          <label className="select-all-label">
-            <input
-              type="checkbox"
-              checked={selectedFiles.size === files.length && files.length > 0}
-              onChange={handleSelectAll}
-            />
-            全选
-          </label>
-          <span className="selected-count">
-            已选择 {selectedFiles.size} 个文件
-          </span>
-          <button className="btn btn-danger" onClick={handleBatchDelete}>
-            🗑️ 批量删除
-          </button>
-        </div>
-      )}
+      <div className="batch-actions">
+        <label className="select-all-label">
+          <input
+            type="checkbox"
+            checked={selectedFiles.size === files.length && files.length > 0}
+            onChange={handleSelectAll}
+          />
+          全选
+        </label>
+        <span className="selected-count">
+          已选择 {selectedFiles.size} 个文件
+        </span>
+        <button
+          className="btn btn-danger"
+          onClick={handleBatchDelete}
+          disabled={selectedFiles.size === 0}
+        >
+          🗑️ 批量删除
+        </button>
+      </div>
 
       {loading ? (
         <div className="empty-state">
@@ -286,6 +288,7 @@ function FilePage() {
               onSelect={handleSelectFile}
               onPreview={handlePreview}
               onDelete={handleDeleteFile}
+              onError={setError}
             />
           ))}
         </div>
@@ -305,7 +308,11 @@ function FilePage() {
               </button>
             </div>
             <div className="modal-body">
-              <FileUpload onFilesSelected={handleFilesSelected} maxFiles={10} />
+              <FileUpload
+                onFilesSelected={handleFilesSelected}
+                maxFiles={10}
+                onError={setError}
+              />
 
               {uploading && (
                 <div className="upload-progress">
@@ -343,6 +350,7 @@ function FilePage() {
         file={previewFile}
         isOpen={isPreviewOpen}
         onClose={handleClosePreview}
+        onError={setError}
       />
     </div>
   )

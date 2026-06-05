@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import timedelta
 import os
 import shutil
 import uuid
+import csv
+import io
 from pathlib import Path
 
 from database import engine, Base, get_db
@@ -16,7 +17,8 @@ from schemas import (
     Note, NoteCreate, NoteUpdate,
     UserCreate, UserLogin, UserResponse, Token,
     FileResponse as FileSchema, FileUploadResponse,
-    FileDeleteResponse, FileBatchDeleteRequest
+    FileDeleteResponse, FileBatchDeleteRequest,
+    DocumentPreviewResponse
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -37,7 +39,7 @@ ALLOWED_EXTENSIONS = {
     "txt", "md", "csv", "zip", "rar", "7z"
 }
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -242,7 +244,9 @@ def get_files(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    query = db.query(FileModel).filter(FileModel.user_id == current_user.id)
+    query = db.query(FileModel, UserModel.username, UserModel.full_name).join(
+        UserModel, FileModel.user_id == UserModel.id
+    ).filter(FileModel.user_id == current_user.id)
 
     if search:
         query = query.filter(FileModel.original_filename.contains(search))
@@ -258,8 +262,15 @@ def get_files(
             archive_exts = ["zip", "rar", "7z"]
             query = query.filter(FileModel.file_extension.in_(archive_exts))
 
-    files = query.order_by(FileModel.uploaded_at.desc()).all()
-    return files
+    results = query.order_by(FileModel.uploaded_at.desc()).all()
+
+    response_files = []
+    for file_model, username, full_name in results:
+        file_data = file_model.__dict__.copy()
+        file_data["uploader_name"] = full_name or username
+        response_files.append(file_data)
+
+    return response_files
 
 
 @app.post("/api/files/upload", response_model=FileUploadResponse)
@@ -273,14 +284,14 @@ async def upload_files(
 
     for file in files:
         try:
-            if not is_allowed_file(file.filename):
-                errors.append(f"文件 {file.filename} 类型不支持")
-                continue
-
             file_content = await file.read()
 
             if len(file_content) > MAX_FILE_SIZE:
                 errors.append(f"文件 {file.filename} 超过最大限制 (50MB)")
+                continue
+
+            if not is_allowed_file(file.filename):
+                errors.append(f"文件 {file.filename} 类型不支持")
                 continue
 
             ext = get_file_extension(file.filename)
@@ -437,3 +448,134 @@ def batch_delete_files(
     db.commit()
 
     return {"message": f"成功删除 {deleted_count} 个文件", "deleted_count": deleted_count}
+
+
+@app.get("/api/files/{file_id}/preview-document", response_model=DocumentPreviewResponse)
+def preview_document(
+    file_id: int,
+    max_rows: int = Query(100, description="最大预览行数", ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    file = db.query(FileModel).filter(
+        FileModel.id == file_id,
+        FileModel.user_id == current_user.id
+    ).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if not os.path.exists(file.file_path):
+        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+
+    text_extensions = {"txt", "md", "csv"}
+    excel_extensions = {"xls", "xlsx"}
+    ext = file.file_extension.lower()
+
+    if ext in text_extensions:
+        try:
+            with open(file.file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            if ext == "csv":
+                try:
+                    csv_data = []
+                    reader = csv.reader(io.StringIO(content))
+                    for i, row in enumerate(reader):
+                        if i > max_rows:
+                            break
+                        csv_data.append([str(cell) for cell in row])
+
+                    if csv_data:
+                        headers = csv_data[0]
+                        rows = csv_data[1:max_rows + 1]
+                        return DocumentPreviewResponse(
+                            file_id=file.id,
+                            filename=file.original_filename,
+                            file_type=file.file_type,
+                            content_type="table",
+                            headers=headers,
+                            rows=rows,
+                            total_rows=len(csv_data) - 1,
+                            total_columns=len(headers)
+                        )
+                except Exception as e:
+                    pass
+
+            return DocumentPreviewResponse(
+                file_id=file.id,
+                filename=file.original_filename,
+                file_type=file.file_type,
+                content_type="text",
+                content=content[:100000]
+            )
+        except UnicodeDecodeError:
+            try:
+                with open(file.file_path, "r", encoding="gbk") as f:
+                    content = f.read()
+                return DocumentPreviewResponse(
+                    file_id=file.id,
+                    filename=file.original_filename,
+                    file_type=file.file_type,
+                    content_type="text",
+                    content=content[:100000]
+                )
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"无法读取文件内容: {str(e)}")
+
+    elif ext in excel_extensions:
+        try:
+            import pandas as pd
+
+            df = pd.read_excel(file.file_path, nrows=max_rows)
+            df = df.fillna("")
+
+            headers = [str(col) for col in df.columns.tolist()]
+            rows = df.values.tolist()
+            rows = [[str(cell) for cell in row] for row in rows]
+
+            return DocumentPreviewResponse(
+                file_id=file.id,
+                filename=file.original_filename,
+                file_type=file.file_type,
+                content_type="table",
+                headers=headers,
+                rows=rows,
+                total_rows=len(rows),
+                total_columns=len(headers)
+            )
+        except ImportError:
+            raise HTTPException(status_code=500, detail="服务器未安装 Excel 处理库，请联系管理员")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"无法读取 Excel 文件: {str(e)}")
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"该文件类型不支持在线预览。支持的类型: txt, md, csv, xls, xlsx"
+        )
+
+
+@app.get("/api/files/{file_id}/image-blob")
+def get_image_blob(
+    file_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    file = db.query(FileModel).filter(
+        FileModel.id == file_id,
+        FileModel.user_id == current_user.id
+    ).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if not os.path.exists(file.file_path):
+        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+
+    image_extensions = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
+    if file.file_extension not in image_extensions:
+        raise HTTPException(status_code=400, detail="该文件不是图片类型")
+
+    return FileResponse(
+        path=file.file_path,
+        media_type=file.file_type
+    )

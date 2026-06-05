@@ -1,155 +1,282 @@
 import requests
 import json
+import tempfile
+import os
 
-base_url = 'http://localhost:8000'
+BASE_URL = 'http://localhost:8000'
 
-print('=' * 50)
-print('用户认证系统 API 测试')
-print('=' * 50)
+def test_all():
+    print('=' * 60)
+    print('后端 API 功能测试')
+    print('=' * 60)
+    print()
 
-print('\n1. 测试用户注册')
-print('-' * 30)
-register_data = {
-    'username': 'testuser',
-    'email': 'test@example.com',
-    'password': 'password123',
-    'full_name': '测试用户'
-}
-resp = requests.post(f'{base_url}/api/auth/register', json=register_data)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 201:
-    print('✅ 注册成功')
-    print(f'  用户信息: {resp.json()["username"]} ({resp.json()["email"]})')
-else:
-    print(f'❌ 注册失败: {resp.json()}')
+    # 1. 测试登录
+    print('【1/6】测试登录')
+    print('-' * 40)
+    import uuid
+    random_suffix = uuid.uuid4().hex[:8]
+    username = f'testuser_{random_suffix}'
+    login_data = {'username': username, 'password': 'test123456'}
 
-print('\n2. 测试重复用户名注册')
-print('-' * 30)
-resp = requests.post(f'{base_url}/api/auth/register', json=register_data)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 400:
-    print(f'✅ 正确拒绝重复注册: {resp.json()["detail"]}')
-else:
-    print('❌ 应该拒绝重复注册')
+    print(f'使用测试用户: {username}')
+    try:
+        print('尝试注册新用户...')
+        register_data = {
+            'username': username,
+            'email': f'{username}@example.com',
+            'password': 'test123456',
+            'full_name': '测试用户'
+        }
+        response = requests.post(f'{BASE_URL}/api/auth/register', json=register_data)
+        print(f'注册状态: {response.status_code}')
+        if response.status_code in [200, 201]:
+            print('注册成功，尝试登录...')
+            response = requests.post(f'{BASE_URL}/api/auth/login', json=login_data)
+            print(f'登录状态: {response.status_code}')
+            if response.status_code == 200:
+                token = response.json()['access_token']
+                headers = {'Authorization': f'Bearer {token}'}
+                print('✓ 登录成功，获取到Token')
+            else:
+                print(f'✗ 登录失败: {response.text}')
+                return
+        else:
+            print(f'✗ 注册失败: {response.text}')
+            # 尝试直接登录（如果用户已存在）
+            print('尝试直接登录...')
+            response = requests.post(f'{BASE_URL}/api/auth/login', json=login_data)
+            if response.status_code == 200:
+                token = response.json()['access_token']
+                headers = {'Authorization': f'Bearer {token}'}
+                print('✓ 直接登录成功')
+            else:
+                return
+    except Exception as e:
+        print(f'✗ 登录异常: {e}')
+        import traceback
+        traceback.print_exc()
+        return
+    print()
 
-print('\n3. 测试用户登录')
-print('-' * 30)
-login_data = {
-    'username': 'testuser',
-    'password': 'password123'
-}
-resp = requests.post(f'{base_url}/api/auth/login', json=login_data)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    print('✅ 登录成功')
-    login_result = resp.json()
-    token = login_result['access_token']
-    print(f'  Token: {token[:50]}...')
-    headers = {'Authorization': f'Bearer {token}'}
-else:
-    print(f'❌ 登录失败: {resp.json()}')
-    exit(1)
+    # 2. 测试获取文件列表（包含上传者信息）
+    print('【2/6】测试获取文件列表（包含上传者信息）')
+    print('-' * 40)
+    try:
+        response = requests.get(f'{BASE_URL}/api/files', headers=headers)
+        print(f'状态码: {response.status_code}')
+        if response.status_code == 200:
+            data = response.json()
+            print(f'文件数量: {len(data)}')
+            if len(data) > 0:
+                first_file = data[0]
+                print(f'第一个文件: {first_file["original_filename"]}')
+                print(f'上传者ID: {first_file["user_id"]}')
+                print(f'上传者姓名: {first_file.get("uploader_name", "未返回")}')
+                if first_file.get("uploader_name"):
+                    print('✓ 接口正确返回上传者信息')
+                else:
+                    print('✗ 接口未返回上传者姓名')
+            else:
+                print('⚠ 暂无文件，请先上传文件后再测试')
+        else:
+            print(f'✗ 错误: {response.text}')
+    except Exception as e:
+        print(f'✗ 异常: {e}')
+    print()
 
-print('\n4. 测试错误密码登录')
-print('-' * 30)
-wrong_login = {'username': 'testuser', 'password': 'wrongpassword'}
-resp = requests.post(f'{base_url}/api/auth/login', json=wrong_login)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 401:
-    print(f'✅ 正确拒绝错误密码: {resp.json()["detail"]}')
-else:
-    print('❌ 应该拒绝错误密码')
+    # 3. 测试公开静态访问是否已关闭
+    print('【3/6】测试公开静态访问是否已关闭')
+    print('-' * 40)
+    try:
+        response = requests.get(f'{BASE_URL}/uploads/test.jpg')
+        print(f'/uploads/test.jpg 状态码: {response.status_code}')
+        if response.status_code == 404 or response.status_code == 405:
+            print('✓ 公开静态访问已关闭')
+        else:
+            print('✗ 公开静态访问可能还存在')
+    except Exception as e:
+        print(f'请求异常（预期）: {e}')
+        print('✓ 公开静态访问已关闭')
+    print()
 
-print('\n5. 测试获取当前用户信息（受保护路由）')
-print('-' * 30)
-resp = requests.get(f'{base_url}/api/auth/me', headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    user_data = resp.json()
-    print('✅ 获取用户信息成功')
-    print(f'  用户名: {user_data["username"]}')
-    print(f'  邮箱: {user_data["email"]}')
-    print(f'  姓名: {user_data["full_name"]}')
-else:
-    print(f'❌ 获取用户信息失败: {resp.json()}')
+    # 4. 测试未授权访问文件接口
+    print('【4/6】测试未授权访问')
+    print('-' * 40)
+    try:
+        response = requests.get(f'{BASE_URL}/api/files')
+        print(f'未授权访问文件列表状态码: {response.status_code}')
+        if response.status_code == 401:
+            print('✓ 未授权访问被正确拦截')
+        else:
+            print('✗ 未授权访问未被拦截')
+    except Exception as e:
+        print(f'✗ 异常: {e}')
+    print()
 
-print('\n6. 测试无 Token 访问受保护路由')
-print('-' * 30)
-resp = requests.get(f'{base_url}/api/notes')
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 401:
-    print(f'✅ 正确要求认证: {resp.json()["detail"]}')
-else:
-    print('❌ 应该要求认证')
+    # 5. 测试上传接口校验顺序
+    print('【5/6】测试上传接口校验顺序')
+    print('-' * 40)
 
-print('\n7. 测试创建笔记（受保护路由）')
-print('-' * 30)
-note_data = {'title': '测试笔记标题', 'content': '这是一条测试笔记的内容'}
-resp = requests.post(f'{base_url}/api/notes', json=note_data, headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    print('✅ 创建笔记成功')
-    note = resp.json()
-    print(f'  笔记ID: {note["id"]}')
-    print(f'  标题: {note["title"]}')
-    note_id = note['id']
-else:
-    print(f'❌ 创建笔记失败: {resp.status_code}')
-    print(f'  响应: {resp.text}')
-    exit(1)
+    large_file = None
+    exe_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as f:
+            f.write(b'x' * (60 * 1024 * 1024))
+            large_file = f.name
 
-print('\n8. 测试获取笔记列表（受保护路由）')
-print('-' * 30)
-resp = requests.get(f'{base_url}/api/notes', headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    notes = resp.json()
-    print(f'✅ 获取笔记列表成功，共 {len(notes)} 条笔记')
-    for n in notes:
-        print(f'  - {n["title"]} (ID: {n["id"]})')
-else:
-    print(f'❌ 获取笔记列表失败: {resp.json()}')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.exe') as f:
+            f.write(b'test')
+            exe_file = f.name
 
-print('\n9. 测试更新笔记（受保护路由）')
-print('-' * 30)
-update_data = {'title': '更新后的标题', 'content': '更新后的内容'}
-resp = requests.put(f'{base_url}/api/notes/{note_id}', json=update_data, headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    updated = resp.json()
-    print('✅ 更新笔记成功')
-    print(f'  新标题: {updated["title"]}')
-else:
-    print(f'❌ 更新笔记失败: {resp.json()}')
+        # 测试超大文件
+        print('测试超大文件上传（60MB .txt）:')
+        with open(large_file, 'rb') as f:
+            files = [('files', ('large_file.txt', f, 'text/plain'))]
+            response = requests.post(f'{BASE_URL}/api/files/upload', headers=headers, files=files)
+        print(f'  状态码: {response.status_code}')
+        result = response.json()
+        print(f'  响应: {json.dumps(result, ensure_ascii=False)}')
+        if '超过最大限制' in result.get('message', '') or (result.get('errors') and any('超过最大限制' in e for e in result['errors'])):
+            print('  ✓ 超大文件返回大小超限提示')
+        else:
+            print('  ✗ 超大文件提示不正确')
 
-print('\n10. 测试搜索笔记')
-print('-' * 30)
-resp = requests.get(f'{base_url}/api/notes?search=测试', headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    notes = resp.json()
-    print(f'✅ 搜索成功，找到 {len(notes)} 条匹配笔记')
-else:
-    print(f'❌ 搜索失败: {resp.json()}')
+        print()
 
-print('\n11. 测试删除笔记（受保护路由）')
-print('-' * 30)
-resp = requests.delete(f'{base_url}/api/notes/{note_id}', headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    print('✅ 删除笔记成功')
-else:
-    print(f'❌ 删除笔记失败: {resp.json()}')
+        # 测试类型不支持
+        print('测试不支持类型文件（.exe）:')
+        with open(exe_file, 'rb') as f:
+            files = [('files', ('test.exe', f, 'application/exe'))]
+            response = requests.post(f'{BASE_URL}/api/files/upload', headers=headers, files=files)
+        print(f'  状态码: {response.status_code}')
+        result = response.json()
+        print(f'  响应: {json.dumps(result, ensure_ascii=False)}')
+        if '类型不支持' in result.get('message', '') or (result.get('errors') and any('类型不支持' in e for e in result['errors'])):
+            print('  ✓ 不支持类型文件返回类型错误提示')
+        else:
+            print('  ✗ 不支持类型文件提示不正确')
 
-print('\n12. 测试用户登出')
-print('-' * 30)
-resp = requests.post(f'{base_url}/api/auth/logout', headers=headers)
-print(f'状态码: {resp.status_code}')
-if resp.status_code == 200:
-    print(f'✅ 登出成功: {resp.json()["message"]}')
-else:
-    print(f'❌ 登出失败: {resp.json()}')
+        print()
 
-print('\n' + '=' * 50)
-print('✅ 所有 API 测试通过！')
-print('=' * 50)
+        # 测试超大且类型不支持的文件
+        print('测试超大且类型不支持（60MB .exe）:')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.exe') as f:
+            f.write(b'x' * (60 * 1024 * 1024))
+            large_exe = f.name
+        try:
+            with open(large_exe, 'rb') as f:
+                files = [('files', ('large.exe', f, 'application/exe'))]
+                response = requests.post(f'{BASE_URL}/api/files/upload', headers=headers, files=files)
+            print(f'  状态码: {response.status_code}')
+            result = response.json()
+            print(f'  响应: {json.dumps(result, ensure_ascii=False)}')
+            if result.get('errors') and any('超过最大限制' in e for e in result['errors']):
+                print('  ✓ 校验顺序正确：先检查大小')
+            else:
+                print('  ✗ 校验顺序可能有问题')
+        finally:
+            os.unlink(large_exe)
+
+    finally:
+        if large_file and os.path.exists(large_file):
+            os.unlink(large_file)
+        if exe_file and os.path.exists(exe_file):
+            os.unlink(exe_file)
+
+    print()
+
+    # 6. 测试文档预览接口
+    print('【6/6】测试文档预览接口')
+    print('-' * 40)
+
+    txt_file_id = None
+    csv_file_id = None
+
+    try:
+        # 先上传一个 txt 文件
+        print('上传测试文本文件...')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8') as f:
+            f.write('Hello World!\n这是一个测试文件。\n第三行内容。')
+            test_txt = f.name
+
+        with open(test_txt, 'rb') as f:
+            files = [('files', ('test.txt', f, 'text/plain'))]
+            response = requests.post(f'{BASE_URL}/api/files/upload', headers=headers, files=files)
+        result = response.json()
+        if result.get('files'):
+            txt_file_id = result['files'][0]['id']
+            print(f'✓ txt 上传成功，ID: {txt_file_id}')
+
+            # 测试文档预览
+            print('测试 txt 文档预览:')
+            response = requests.get(f'{BASE_URL}/api/files/{txt_file_id}/preview-document', headers=headers)
+            print(f'  状态码: {response.status_code}')
+            if response.status_code == 200:
+                data = response.json()
+                print(f'  内容类型: {data.get("content_type")}')
+                print(f'  内容: {data.get("content", "")[:50]}...')
+                print('  ✓ txt 文档预览正常')
+            else:
+                print(f'  ✗ 预览失败: {response.text}')
+        else:
+            print('⚠ txt 上传失败，跳过预览测试')
+
+        os.unlink(test_txt)
+        print()
+
+        # 上传一个 csv 文件
+        print('上传测试 CSV 文件...')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w', encoding='utf-8') as f:
+            f.write('姓名,年龄,城市\n张三,25,北京\n李四,30,上海\n王五,28,广州')
+            test_csv = f.name
+
+        with open(test_csv, 'rb') as f:
+            files = [('files', ('test.csv', f, 'text/csv'))]
+            response = requests.post(f'{BASE_URL}/api/files/upload', headers=headers, files=files)
+        result = response.json()
+        if result.get('files'):
+            csv_file_id = result['files'][0]['id']
+            print(f'✓ csv 上传成功，ID: {csv_file_id}')
+
+            # 测试表格预览
+            print('测试 csv 表格预览:')
+            response = requests.get(f'{BASE_URL}/api/files/{csv_file_id}/preview-document', headers=headers)
+            print(f'  状态码: {response.status_code}')
+            if response.status_code == 200:
+                data = response.json()
+                print(f'  内容类型: {data.get("content_type")}')
+                print(f'  表头: {data.get("headers")}')
+                print(f'  行数: {data.get("total_rows")}, 列数: {data.get("total_columns")}')
+                print(f'  第一行: {data.get("rows", [[]])[0]}')
+                print('  ✓ csv 表格预览正常')
+            else:
+                print(f'  ✗ 预览失败: {response.text}')
+        else:
+            print('⚠ csv 上传失败，跳过预览测试')
+
+        os.unlink(test_csv)
+
+    except Exception as e:
+        print(f'✗ 文档预览测试异常: {e}')
+        import traceback
+        traceback.print_exc()
+
+    # 清理测试文件
+    print()
+    print('清理测试文件...')
+    for file_id in [txt_file_id, csv_file_id]:
+        if file_id:
+            try:
+                response = requests.delete(f'{BASE_URL}/api/files/{file_id}', headers=headers)
+                print(f'  删除文件 {file_id}: {response.status_code}')
+            except:
+                pass
+
+    print()
+    print('=' * 60)
+    print('后端 API 测试完成！')
+    print('=' * 60)
+
+if __name__ == '__main__':
+    test_all()

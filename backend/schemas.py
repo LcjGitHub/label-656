@@ -88,6 +88,7 @@ class FileResponse(FileBase):
     file_extension: Optional[str] = None
     uploaded_at: datetime
     user_id: int
+    uploader_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -105,3 +106,15 @@ class FileDeleteResponse(BaseModel):
 
 class FileBatchDeleteRequest(BaseModel):
     file_ids: List[int]
+
+
+class DocumentPreviewResponse(BaseModel):
+    file_id: int
+    filename: str
+    file_type: str
+    content_type: str
+    content: Optional[str] = None
+    rows: Optional[List[List[str]]] = None
+    headers: Optional[List[str]] = None
+    total_rows: Optional[int] = None
+    total_columns: Optional[int] = None

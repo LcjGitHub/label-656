@@ -111,6 +111,18 @@ export const fileApi = {
     })
   },
 
+  getImageBlob: (id) => {
+    return api.get(`/files/${id}/image-blob`, {
+      responseType: 'blob',
+    })
+  },
+
+  previewDocument: (id, maxRows = 100) => {
+    return api.get(`/files/${id}/preview-document`, {
+      params: { max_rows: maxRows }
+    })
+  },
+
   previewFile: (id) => {
     return `${api.defaults.baseURL}/files/${id}/preview`
   },
