@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
 import { noteApi } from './services/api.js'
@@ -13,6 +14,7 @@ function App() {
   const [modalError, setModalError] = useState('')
   const [loading, setLoading] = useState(true)
   const { user, logout } = useAuth()
+  const location = useLocation()
 
   const fetchNotes = async (search = '') => {
     try {
@@ -103,6 +105,20 @@ function App() {
             <h1>📝 笔记管理</h1>
             <p>记录你的想法，随时查看和编辑</p>
           </div>
+          <nav className="main-nav">
+            <Link
+              to="/"
+              className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}
+            >
+              📝 笔记
+            </Link>
+            <Link
+              to="/files"
+              className={`nav-link ${location.pathname === '/files' ? 'active' : ''}`}
+            >
+              📁 文件
+            </Link>
+          </nav>
           <div className="user-info">
             <span className="user-greeting">
               👤 {user?.full_name || user?.username}

@@ -80,4 +80,48 @@ export const noteApi = {
   },
 }
 
+export const fileApi = {
+  getFiles: (search = '', fileType = '') => {
+    const params = {}
+    if (search) params.search = search
+    if (fileType) params.file_type = fileType
+    return api.get('/files', { params })
+  },
+
+  getFile: (id) => {
+    return api.get(`/files/${id}`)
+  },
+
+  uploadFiles: (files, onUploadProgress) => {
+    const formData = new FormData()
+    files.forEach(file => {
+      formData.append('files', file)
+    })
+    return api.post('/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress,
+    })
+  },
+
+  downloadFile: (id) => {
+    return api.get(`/files/${id}/download`, {
+      responseType: 'blob',
+    })
+  },
+
+  previewFile: (id) => {
+    return `${api.defaults.baseURL}/files/${id}/preview`
+  },
+
+  deleteFile: (id) => {
+    return api.delete(`/files/${id}`)
+  },
+
+  batchDeleteFiles: (fileIds) => {
+    return api.post('/files/batch-delete', { file_ids: fileIds })
+  },
+}
+
 export default api

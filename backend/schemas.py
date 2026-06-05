@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 import re
 
 
@@ -74,3 +74,34 @@ class Note(NoteBase):
 
     class Config:
         from_attributes = True
+
+
+class FileBase(BaseModel):
+    pass
+
+
+class FileResponse(FileBase):
+    id: int
+    original_filename: str
+    file_size: int
+    file_type: str
+    file_extension: Optional[str] = None
+    uploaded_at: datetime
+    user_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class FileUploadResponse(BaseModel):
+    message: str
+    files: List[FileResponse]
+
+
+class FileDeleteResponse(BaseModel):
+    message: str
+    deleted_count: int
+
+
+class FileBatchDeleteRequest(BaseModel):
+    file_ids: List[int]
