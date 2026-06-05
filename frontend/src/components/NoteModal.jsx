@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 
-const NoteModal = ({ isOpen, onClose, onSubmit, note }) => {
+const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
+  const [localError, setLocalError] = useState('')
   const isEditing = !!note
 
   useEffect(() => {
@@ -13,12 +14,42 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note }) => {
       setTitle('')
       setContent('')
     }
+    setLocalError('')
   }, [note, isOpen])
+
+  useEffect(() => {
+    if (error && isOpen) {
+      setLocalError(error)
+    }
+  }, [error, isOpen])
+
+  const validateForm = () => {
+    const trimmedTitle = title.trim()
+    const trimmedContent = content.trim()
+
+    if (!trimmedTitle) {
+      setLocalError('标题不能为空或仅包含空格')
+      return false
+    }
+    if (trimmedTitle.length > 200) {
+      setLocalError('标题长度不能超过200个字符')
+      return false
+    }
+    if (!trimmedContent) {
+      setLocalError('内容不能为空或仅包含空格')
+      return false
+    }
+    if (trimmedContent.length > 2000) {
+      setLocalError('内容长度不能超过2000个字符')
+      return false
+    }
+    setLocalError('')
+    return true
+  }
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!title.trim() || !content.trim()) {
-      alert('标题和内容不能为空')
+    if (!validateForm()) {
       return
     }
     onSubmit({ title: title.trim(), content: content.trim() })
@@ -35,6 +66,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note }) => {
             &times;
           </button>
         </div>
+        {localError && <div className="error-message">{localError}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label htmlFor="title">标题</label>

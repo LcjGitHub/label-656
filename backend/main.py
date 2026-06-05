@@ -43,9 +43,23 @@ def get_note(note_id: int, db: Session = Depends(get_db)):
     return note
 
 
+def validate_note_data(title: str = None, content: str = None):
+    if title is not None:
+        if not title.strip():
+            raise HTTPException(status_code=400, detail="标题不能为空或仅包含空格")
+        if len(title.strip()) > 200:
+            raise HTTPException(status_code=400, detail="标题长度不能超过200个字符")
+    if content is not None:
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="内容不能为空或仅包含空格")
+        if len(content.strip()) > 2000:
+            raise HTTPException(status_code=400, detail="内容长度不能超过2000个字符")
+
+
 @app.post("/api/notes", response_model=Note)
 def create_note(note: NoteCreate, db: Session = Depends(get_db)):
-    db_note = NoteModel(title=note.title, content=note.content)
+    validate_note_data(title=note.title, content=note.content)
+    db_note = NoteModel(title=note.title.strip(), content=note.content.strip())
     db.add(db_note)
     db.commit()
     db.refresh(db_note)
@@ -58,10 +72,12 @@ def update_note(note_id: int, note: NoteUpdate, db: Session = Depends(get_db)):
     if not db_note:
         raise HTTPException(status_code=404, detail="笔记不存在")
     
+    validate_note_data(title=note.title, content=note.content)
+    
     if note.title is not None:
-        db_note.title = note.title
+        db_note.title = note.title.strip()
     if note.content is not None:
-        db_note.content = note.content
+        db_note.content = note.content.strip()
     
     db.commit()
     db.refresh(db_note)

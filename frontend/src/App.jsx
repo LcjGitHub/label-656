@@ -31,6 +31,8 @@ function App() {
 
   const handleSearch = (e) => {
     setSearchKeyword(e.target.value)
+    setNotes([])
+    setLoading(true)
   }
 
   const handleCreateNote = () => {
@@ -49,7 +51,7 @@ function App() {
     try {
       setError('')
       await noteApi.deleteNote(id)
-      setNotes(notes.filter(note => note.id !== id))
+      await fetchNotes(searchKeyword)
     } catch (err) {
       setError('删除笔记失败，请稍后重试')
       console.error('Error deleting note:', err)
@@ -60,18 +62,19 @@ function App() {
     try {
       setError('')
       if (editingNote) {
-        const response = await noteApi.updateNote(editingNote.id, noteData)
-        setNotes(notes.map(note =>
-          note.id === editingNote.id ? response.data : note
-        ))
+        await noteApi.updateNote(editingNote.id, noteData)
       } else {
-        const response = await noteApi.createNote(noteData)
-        setNotes([response.data, ...notes])
+        await noteApi.createNote(noteData)
       }
+      await fetchNotes(searchKeyword)
       setIsModalOpen(false)
       setEditingNote(null)
     } catch (err) {
-      setError('保存笔记失败，请稍后重试')
+      if (err.response && err.response.data && err.response.data.detail) {
+        setError(err.response.data.detail)
+      } else {
+        setError('保存笔记失败，请稍后重试')
+      }
       console.error('Error saving note:', err)
     }
   }
@@ -79,6 +82,7 @@ function App() {
   const handleCloseModal = () => {
     setIsModalOpen(false)
     setEditingNote(null)
+    setError('')
   }
 
   return (
@@ -137,6 +141,7 @@ function App() {
         onClose={handleCloseModal}
         onSubmit={handleSubmitNote}
         note={editingNote}
+        error={error}
       />
     </div>
   )

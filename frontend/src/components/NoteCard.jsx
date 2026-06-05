@@ -1,3 +1,7 @@
+const escapeRegExp = (string) => {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 const NoteCard = ({ note, searchKeyword, onEdit, onDelete }) => {
   const formatDate = (dateString) => {
     if (!dateString) return ''
@@ -13,10 +17,12 @@ const NoteCard = ({ note, searchKeyword, onEdit, onDelete }) => {
 
   const highlightText = (text, keyword) => {
     if (!keyword) return text
-    const regex = new RegExp(`(${keyword})`, 'gi')
+    const escapedKeyword = escapeRegExp(keyword)
+    const regex = new RegExp(`(${escapedKeyword})`, 'gi')
     const parts = text.split(regex)
+    const keywordLower = keyword.toLowerCase()
     return parts.map((part, index) =>
-      regex.test(part) ? (
+      part.toLowerCase() === keywordLower ? (
         <span key={index} className="highlight">{part}</span>
       ) : (
         part
