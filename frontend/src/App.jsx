@@ -26,6 +26,8 @@ function App() {
   const [viewMode, setViewMode] = useState('all')
   const [selectedNoteIds, setSelectedNoteIds] = useState([])
   const [selectMode, setSelectMode] = useState(false)
+  const [showBatchPinPriority, setShowBatchPinPriority] = useState(false)
+  const [batchPinPriority, setBatchPinPriority] = useState(0)
 
   const fetchAllNotes = async () => {
     try {
@@ -157,35 +159,51 @@ function App() {
     )
   }
 
-  const handleFavoriteToggle = (updatedNote) => {
-    setNotes(prevNotes =>
-      prevNotes.map(note =>
-        note.id === updatedNote.id ? updatedNote : note
-      )
-    )
+  const handleFavoriteToggle = (updatedNote, currentViewMode) => {
+    const isFavorited = updatedNote.is_favorited === 1
     setAllNotes(prevAllNotes =>
       prevAllNotes.map(note =>
         note.id === updatedNote.id ? updatedNote : note
       )
     )
+    if (currentViewMode === 'favorites' && !isFavorited) {
+      setNotes(prevNotes =>
+        prevNotes.filter(note => note.id !== updatedNote.id)
+      )
+    } else {
+      setNotes(prevNotes =>
+        prevNotes.map(note =>
+          note.id === updatedNote.id ? updatedNote : note
+        )
+      )
+    }
   }
 
-  const handlePinToggle = (updatedNote) => {
-    setNotes(prevNotes => {
-      const newNotes = prevNotes.map(note =>
-        note.id === updatedNote.id ? updatedNote : note
-      )
-      return newNotes.sort((a, b) => {
-        if (b.is_pinned !== a.is_pinned) return b.is_pinned - a.is_pinned
-        if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
-        return 0
-      })
-    })
+  const handlePinToggle = (updatedNote, currentViewMode) => {
+    const isPinned = updatedNote.is_pinned === 1
     setAllNotes(prevAllNotes =>
       prevAllNotes.map(note =>
         note.id === updatedNote.id ? updatedNote : note
       )
     )
+    if (currentViewMode === 'pinned' && !isPinned) {
+      setNotes(prevNotes =>
+        prevNotes.filter(note => note.id !== updatedNote.id)
+      )
+    } else {
+      setNotes(prevNotes => {
+        const newNotes = prevNotes.map(note =>
+          note.id === updatedNote.id ? updatedNote : note
+        )
+        return newNotes.sort((a, b) => {
+          const aPinned = a.is_pinned === 1 ? 1 : 0
+          const bPinned = b.is_pinned === 1 ? 1 : 0
+          if (bPinned !== aPinned) return bPinned - aPinned
+          if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
+          return 0
+        })
+      })
+    }
   }
 
   const handleSelectNote = (noteId, checked) => {
@@ -238,36 +256,49 @@ function App() {
     }
   }
 
-  const handleBatchPin = async (isPinned) => {
+  const handleBatchPinClick = (isPinned) => {
     if (selectedNoteIds.length === 0) {
       alert('请先选择要操作的笔记')
       return
     }
+    if (isPinned) {
+      setBatchPinPriority(0)
+      setShowBatchPinPriority(true)
+    } else {
+      handleBatchPin(false, 0)
+    }
+  }
+
+  const handleBatchPin = async (isPinned, priority = 0) => {
     const action = isPinned ? '置顶' : '取消置顶'
     if (!window.confirm(`确定要${action}选中的 ${selectedNoteIds.length} 条笔记吗？`)) return
 
     try {
       setError('')
-      const response = await noteApi.batchSetPin(selectedNoteIds, isPinned)
+      const response = await noteApi.batchSetPin(selectedNoteIds, isPinned, priority)
       const updatedNotes = response.data
-      setNotes(prevNotes => {
-        const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
-        return prevNotes.map(note => noteMap.get(note.id) || note)
-          .sort((a, b) => {
-            if (b.is_pinned !== a.is_pinned) return b.is_pinned - a.is_pinned
-            if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
-            return 0
-          })
-      })
       setAllNotes(prevAllNotes => {
         const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
         return prevAllNotes.map(note => noteMap.get(note.id) || note)
       })
       if (!isPinned && viewMode === 'pinned') {
         await fetchNotes(searchKeyword, selectedTagId)
+      } else {
+        setNotes(prevNotes => {
+          const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
+          return prevNotes.map(note => noteMap.get(note.id) || note)
+            .sort((a, b) => {
+              const aPinned = a.is_pinned === 1 ? 1 : 0
+              const bPinned = b.is_pinned === 1 ? 1 : 0
+              if (bPinned !== aPinned) return bPinned - aPinned
+              if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
+              return 0
+            })
+        })
       }
       setSelectedNoteIds([])
       setSelectMode(false)
+      setShowBatchPinPriority(false)
       alert(`成功${action} ${updatedNotes.length} 条笔记`)
     } catch (err) {
       setError(`批量${action}失败，请稍后重试`)
@@ -550,14 +581,14 @@ function App() {
           </button>
           <button
             className="btn btn-primary btn-small"
-            onClick={() => handleBatchPin(true)}
+            onClick={() => handleBatchPinClick(true)}
             disabled={selectedNoteIds.length === 0}
           >
             📌 批量置顶
           </button>
           <button
             className="btn btn-secondary btn-small"
-            onClick={() => handleBatchPin(false)}
+            onClick={() => handleBatchPinClick(false)}
             disabled={selectedNoteIds.length === 0}
           >
             📍 取消置顶
@@ -576,6 +607,58 @@ function App() {
           >
             💔 批量取消收藏
           </button>
+
+          {showBatchPinPriority && (
+            <div className="modal-overlay" onClick={() => setShowBatchPinPriority(false)}>
+              <div className="modal-content small-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>设置置顶优先级</h3>
+                  <button className="btn-close" onClick={() => setShowBatchPinPriority(false)}>
+                    &times;
+                  </button>
+                </div>
+                <div className="modal-body">
+                  <p className="pin-priority-desc">数值越大越靠前</p>
+                  <div className="pin-priority-input-wrapper">
+                    <input
+                      type="number"
+                      className="pin-priority-input"
+                      value={batchPinPriority}
+                      onChange={(e) => setBatchPinPriority(Math.max(0, parseInt(e.target.value) || 0))}
+                      min="0"
+                      max="999"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="pin-priority-presets">
+                    {[0, 1, 2, 3, 5, 10].map(p => (
+                      <button
+                        key={p}
+                        className={`pin-priority-preset ${batchPinPriority === p ? 'active' : ''}`}
+                        onClick={() => setBatchPinPriority(p)}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setShowBatchPinPriority(false)}
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleBatchPin(true, batchPinPriority)}
+                  >
+                    确定置顶
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -620,6 +703,7 @@ function App() {
               selectable={selectMode}
               selected={selectedNoteIds.includes(note.id)}
               onSelect={handleSelectNote}
+              viewMode={viewMode}
             />
           ))}
         </div>

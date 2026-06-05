@@ -1496,13 +1496,13 @@ body {
   color: #7f8c8d;
 }
 
+.note-card {
+  position: relative;
+}
+
 .note-card.pinned {
   border: 2px solid #f39c12;
   background: linear-gradient(135deg, #fff 0%, #fffbeb 100%);
-}
-
-.note-card.favorited {
-  position: relative;
 }
 
 .note-card.selected {
@@ -1527,6 +1527,18 @@ body {
 .pin-indicator {
   margin-right: 8px;
   animation: bounce 2s infinite;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pin-priority-badge {
+  background: #f39c12;
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 10px;
+  animation: none;
 }
 
 @keyframes bounce {
@@ -1570,6 +1582,11 @@ body {
   font-size: 0.85rem;
 }
 
+.btn-tiny {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1579,6 +1596,90 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.pin-action-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.pin-priority-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 200px;
+  margin-top: 8px;
+}
+
+.pin-priority-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  font-size: 0.9rem;
+}
+
+.pin-priority-desc {
+  font-size: 0.8rem;
+  color: #7f8c8d;
+  margin-bottom: 12px;
+}
+
+.pin-priority-input-wrapper {
+  margin-bottom: 12px;
+}
+
+.pin-priority-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 1rem;
+  text-align: center;
+}
+
+.pin-priority-presets {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.pin-priority-preset {
+  flex: 1;
+  min-width: 40px;
+  padding: 6px 8px;
+  border: 1px solid #e0e0e0;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.pin-priority-preset:hover {
+  border-color: #3498db;
+  background: #ebf5fb;
+}
+
+.pin-priority-preset.active {
+  background: #3498db;
+  border-color: #3498db;
+  color: white;
+}
+
+.pin-priority-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.small-modal {
+  max-width: 360px;
 }
 
 .note-meta {
@@ -1696,5 +1797,15 @@ body {
 
   .note-card {
     padding: 15px;
+    position: relative;
+  }
+
+  .pin-priority-popup {
+    position: fixed;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%);
+    min-width: 280px;
+    margin-top: 0;
   }
 }

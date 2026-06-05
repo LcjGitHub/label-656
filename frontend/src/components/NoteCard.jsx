@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { noteApi } from '../services/api.js'
 
 const escapeRegExp = (string) => {
@@ -24,7 +25,11 @@ const NoteCard = ({
   selectable = false,
   selected = false,
   onSelect,
+  viewMode = 'all',
 }) => {
+  const [showPinPriority, setShowPinPriority] = useState(false)
+  const [pinPriority, setPinPriority] = useState(note.pin_priority || 0)
+
   const formatDate = (dateString) => {
     if (!dateString) return ''
     const date = new Date(dateString)
@@ -57,7 +62,7 @@ const NoteCard = ({
     try {
       const response = await noteApi.toggleFavorite(note.id)
       if (onFavoriteToggle) {
-        onFavoriteToggle(response.data)
+        onFavoriteToggle(response.data, viewMode)
       }
     } catch (err) {
       console.error('Error toggling favorite:', err)
@@ -65,17 +70,37 @@ const NoteCard = ({
     }
   }
 
-  const handlePinToggle = async (e) => {
+  const handlePinToggle = async (e, priority = 0) => {
     e.stopPropagation()
     try {
-      const response = await noteApi.togglePin(note.id)
+      const response = await noteApi.togglePin(note.id, priority)
       if (onPinToggle) {
-        onPinToggle(response.data)
+        onPinToggle(response.data, viewMode)
       }
+      setShowPinPriority(false)
     } catch (err) {
       console.error('Error toggling pin:', err)
       alert('操作失败，请稍后重试')
     }
+  }
+
+  const handlePinClick = (e) => {
+    e.stopPropagation()
+    if (note.is_pinned === 1) {
+      handlePinToggle(e, 0)
+    } else {
+      setPinPriority(note.pin_priority || 0)
+      setShowPinPriority(true)
+    }
+  }
+
+  const handleConfirmPin = (e) => {
+    handlePinToggle(e, pinPriority)
+  }
+
+  const handleCancelPin = (e) => {
+    e.stopPropagation()
+    setShowPinPriority(false)
   }
 
   const handleRemoveTag = async (tagId, e) => {
@@ -106,8 +131,11 @@ const NoteCard = ({
     }
   }
 
+  const isPinned = note.is_pinned === 1
+  const isFavorited = note.is_favorited === 1
+
   return (
-    <div className={`note-card ${note.is_pinned ? 'pinned' : ''} ${note.is_favorited ? 'favorited' : ''} ${selected ? 'selected' : ''}`}>
+    <div className={`note-card ${isPinned ? 'pinned' : ''} ${isFavorited ? 'favorited' : ''} ${selected ? 'selected' : ''}`}>
       {selectable && (
         <div className="note-checkbox">
           <input
@@ -120,7 +148,12 @@ const NoteCard = ({
       )}
       <div className="note-header">
         <h3 className="note-title">
-          {note.is_pinned && <span className="pin-indicator" title="已置顶">📌</span>}
+          {isPinned && (
+            <span className="pin-indicator" title={`已置顶 (优先级: ${note.pin_priority})`}>
+              📌
+              {note.pin_priority > 0 && <span className="pin-priority-badge">{note.pin_priority}</span>}
+            </span>
+          )}
           {note.title && note.title.trim()
             ? highlightText(note.title, searchKeyword)
             : <span style={{ color: '#95a5a6', fontStyle: 'italic' }}>无标题</span>
@@ -128,19 +161,57 @@ const NoteCard = ({
         </h3>
         <div className="note-actions">
           <button
-            className={`btn-icon ${note.is_favorited ? 'active' : ''}`}
+            className={`btn-icon ${isFavorited ? 'active' : ''}`}
             onClick={handleFavoriteToggle}
-            title={note.is_favorited ? '取消收藏' : '收藏'}
+            title={isFavorited ? '取消收藏' : '收藏'}
           >
-            {note.is_favorited ? '⭐' : '☆'}
+            {isFavorited ? '⭐' : '☆'}
           </button>
-          <button
-            className={`btn-icon ${note.is_pinned ? 'active' : ''}`}
-            onClick={handlePinToggle}
-            title={note.is_pinned ? '取消置顶' : '置顶'}
-          >
-            {note.is_pinned ? '📌' : '📍'}
-          </button>
+          <div className="pin-action-wrapper">
+            <button
+              className={`btn-icon ${isPinned ? 'active' : ''}`}
+              onClick={handlePinClick}
+              title={isPinned ? '取消置顶' : '置顶'}
+            >
+              {isPinned ? '📌' : '📍'}
+            </button>
+            {showPinPriority && (
+              <div className="pin-priority-popup" onClick={(e) => e.stopPropagation()}>
+                <div className="pin-priority-title">设置置顶优先级</div>
+                <div className="pin-priority-desc">数值越大越靠前</div>
+                <div className="pin-priority-input-wrapper">
+                  <input
+                    type="number"
+                    className="pin-priority-input"
+                    value={pinPriority}
+                    onChange={(e) => setPinPriority(Math.max(0, parseInt(e.target.value) || 0))}
+                    min="0"
+                    max="999"
+                    autoFocus
+                  />
+                </div>
+                <div className="pin-priority-presets">
+                  {[0, 1, 2, 3, 5, 10].map(p => (
+                    <button
+                      key={p}
+                      className={`pin-priority-preset ${pinPriority === p ? 'active' : ''}`}
+                      onClick={() => setPinPriority(p)}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <div className="pin-priority-actions">
+                  <button className="btn btn-secondary btn-tiny" onClick={handleCancelPin}>
+                    取消
+                  </button>
+                  <button className="btn btn-primary btn-tiny" onClick={handleConfirmPin}>
+                    确定
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <button className="btn btn-edit" onClick={(e) => { e.stopPropagation(); onEdit(note); }}>
             编辑
           </button>
@@ -184,11 +255,11 @@ const NoteCard = ({
         {note.updated_at && (
           <span>更新: {formatDate(note.updated_at)}</span>
         )}
-        {note.favorited_at && note.is_favorited && (
-          <span>收藏: {formatDate(note.favorited_at)}</span>
+        {isFavorited && note.favorited_at && (
+          <span>⭐ 收藏: {formatDate(note.favorited_at)}</span>
         )}
-        {note.pinned_at && note.is_pinned && (
-          <span>置顶: {formatDate(note.pinned_at)}</span>
+        {isPinned && note.pinned_at && (
+          <span>📌 置顶 (优先级 {note.pin_priority}): {formatDate(note.pinned_at)}</span>
         )}
       </div>
     </div>
