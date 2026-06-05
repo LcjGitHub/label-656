@@ -16,7 +16,7 @@ const DEFAULT_COLORS = [
   '#27ae60',
 ]
 
-const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
+const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [selectedTagIds, setSelectedTagIds] = useState([])
@@ -32,6 +32,9 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
     try {
       const response = await tagApi.getTags()
       setAvailableTags(response.data)
+      if (onTagsChange) {
+        onTagsChange(response.data)
+      }
     } catch (err) {
       console.error('Error fetching tags:', err)
     }
@@ -79,7 +82,10 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
   }
 
   const handleCreateTag = async (e) => {
-    e.preventDefault()
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
     if (!newTagName.trim()) {
       setTagError('标签名称不能为空')
       return
@@ -87,11 +93,16 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
     try {
       setTagError('')
       const response = await tagApi.createTag({ name: newTagName.trim(), color: newTagColor })
-      setAvailableTags(prev => [...prev, response.data])
-      setSelectedTagIds(prev => [...prev, response.data.id])
+      const newTag = response.data
+      setAvailableTags(prev => [...prev, newTag])
+      setSelectedTagIds(prev => [...prev, newTag.id])
       setNewTagName('')
       setNewTagColor(DEFAULT_COLORS[Math.floor(Math.random() * DEFAULT_COLORS.length)])
       setIsCreatingTag(false)
+      if (onTagsChange) {
+        const allTags = await tagApi.getTags()
+        onTagsChange(allTags.data)
+      }
     } catch (err) {
       if (err.response && err.response.data && err.response.data.detail) {
         setTagError(err.response.data.detail)
@@ -99,6 +110,14 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
         setTagError('创建标签失败')
       }
       console.error('Error creating tag:', err)
+    }
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
+      handleCreateTag()
     }
   }
 
@@ -242,7 +261,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
               ) : (
                 <div className="create-tag-inline">
                   {tagError && <div className="error-message small">{tagError}</div>}
-                  <form onSubmit={handleCreateTag} className="create-tag-form">
+                  <div className="create-tag-form">
                     <div
                       className="color-preview small"
                       style={{ backgroundColor: newTagColor }}
@@ -253,6 +272,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
                       placeholder="标签名称"
                       value={newTagName}
                       onChange={(e) => setNewTagName(e.target.value)}
+                      onKeyDown={handleKeyDown}
                       maxLength={50}
                       autoFocus
                     />
@@ -267,7 +287,11 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
                         />
                       ))}
                     </div>
-                    <button type="submit" className="btn btn-primary btn-tiny">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-tiny"
+                      onClick={handleCreateTag}
+                    >
                       添加
                     </button>
                     <button
@@ -280,7 +304,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error }) => {
                     >
                       取消
                     </button>
-                  </form>
+                  </div>
                 </div>
               )}
             </div>

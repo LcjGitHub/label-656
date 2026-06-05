@@ -8,6 +8,7 @@ import { useAuth } from './context/AuthContext.jsx'
 
 function App() {
   const [notes, setNotes] = useState([])
+  const [allNotes, setAllNotes] = useState([])
   const [tags, setTags] = useState([])
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedTagId, setSelectedTagId] = useState(null)
@@ -17,9 +18,22 @@ function App() {
   const [error, setError] = useState('')
   const [modalError, setModalError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [allNotesLoading, setAllNotesLoading] = useState(true)
   const [tagsLoading, setTagsLoading] = useState(true)
   const { user, logout } = useAuth()
   const location = useLocation()
+
+  const fetchAllNotes = async () => {
+    try {
+      setAllNotesLoading(true)
+      const response = await noteApi.getNotes('', null)
+      setAllNotes(response.data)
+    } catch (err) {
+      console.error('Error fetching all notes:', err)
+    } finally {
+      setAllNotesLoading(false)
+    }
+  }
 
   const fetchNotes = async (search = '', tagId = null) => {
     try {
@@ -47,11 +61,20 @@ function App() {
     }
   }
 
+  const refreshAllData = async () => {
+    await Promise.all([
+      fetchAllNotes(),
+      fetchNotes(searchKeyword, selectedTagId),
+      fetchTags(),
+    ])
+  }
+
   useEffect(() => {
     fetchNotes(searchKeyword, selectedTagId)
   }, [searchKeyword, selectedTagId])
 
   useEffect(() => {
+    fetchAllNotes()
     fetchTags()
   }, [])
 
@@ -87,16 +110,30 @@ function App() {
     try {
       setError('')
       await noteApi.deleteNote(id)
-      await fetchNotes(searchKeyword, selectedTagId)
+      await Promise.all([
+        fetchAllNotes(),
+        fetchNotes(searchKeyword, selectedTagId),
+      ])
     } catch (err) {
       setError('删除笔记失败，请稍后重试')
       console.error('Error deleting note:', err)
     }
   }
 
-  const handleRemoveTag = (noteId, tagId) => {
+  const handleRemoveTag = async (noteId, tagId) => {
     setNotes(prevNotes =>
       prevNotes.map(note => {
+        if (note.id === noteId) {
+          return {
+            ...note,
+            tags: note.tags.filter(t => t.id !== tagId)
+          }
+        }
+        return note
+      })
+    )
+    setAllNotes(prevAllNotes =>
+      prevAllNotes.map(note => {
         if (note.id === noteId) {
           return {
             ...note,
@@ -116,8 +153,7 @@ function App() {
       } else {
         await noteApi.createNote(noteData)
       }
-      await fetchNotes(searchKeyword, selectedTagId)
-      await fetchTags()
+      await refreshAllData()
       setIsModalOpen(false)
       setEditingNote(null)
       setModalError('')
@@ -141,6 +177,16 @@ function App() {
     setTags(newTags)
   }
 
+  const handleNoteModalTagsChange = (newTags) => {
+    setTags(newTags)
+    fetchAllNotes()
+  }
+
+  const handleTagManagerClose = async () => {
+    setIsTagManagerOpen(false)
+    await refreshAllData()
+  }
+
   const handleLogout = async () => {
     if (window.confirm('确定要退出登录吗？')) {
       await logout()
@@ -156,7 +202,7 @@ function App() {
   }
 
   const getNoteCountForTag = (tagId) => {
-    return notes.filter(note => note.tags && note.tags.some(t => t.id === tagId)).length
+    return allNotes.filter(note => note.tags && note.tags.some(t => t.id === tagId)).length
   }
 
   return (
@@ -276,11 +322,12 @@ function App() {
         onSubmit={handleSubmitNote}
         note={editingNote}
         error={modalError}
+        onTagsChange={handleNoteModalTagsChange}
       />
 
       <TagManager
         isOpen={isTagManagerOpen}
-        onClose={() => setIsTagManagerOpen(false)}
+        onClose={handleTagManagerClose}
         onTagsChange={handleTagsChange}
       />
     </div>
