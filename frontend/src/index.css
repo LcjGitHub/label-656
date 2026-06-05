@@ -262,6 +262,15 @@ body {
   text-align: center;
 }
 
+.auth-container .success-message {
+  background-color: #d4edda;
+  color: #27ae60;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
 .highlight {
   background-color: #fffacd;
   padding: 0 2px;

@@ -22,12 +22,15 @@ export const AuthProvider = ({ children }) => {
 
     if (token && storedUser) {
       try {
-        setUser(JSON.parse(storedUser))
+        const response = await authApi.getCurrentUser()
+        setUser(response.data)
         setIsAuthenticated(true)
       } catch (err) {
-        console.error('Failed to parse stored user:', err)
+        console.error('Token validation failed:', err)
         localStorage.removeItem('access_token')
         localStorage.removeItem('user')
+        setUser(null)
+        setIsAuthenticated(false)
       }
     }
     setLoading(false)
@@ -87,6 +90,7 @@ export const AuthProvider = ({ children }) => {
       localStorage.removeItem('user')
       setUser(null)
       setIsAuthenticated(false)
+      window.location.href = '/login'
     }
   }
 

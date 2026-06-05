@@ -151,7 +151,7 @@ const RegisterPage = () => {
               name="email"
               value={formData.email}
               onChange={handleChange}
-              placeholder="your@email.com"
+              placeholder="例如：example@163.com"
               autoComplete="email"
               disabled={loading}
               className={errors.email ? 'input-error' : ''}

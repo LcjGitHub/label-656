@@ -8,12 +8,22 @@ const LoginPage = () => {
     password: '',
   })
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
   const { login, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
   const from = location.state?.from?.pathname || '/'
+  const registered = location.state?.registered
+
+  useEffect(() => {
+    if (registered) {
+      setSuccess('注册成功！请使用新账户登录')
+      const timer = setTimeout(() => setSuccess(''), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [registered])
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -60,6 +70,7 @@ const LoginPage = () => {
           <p>登录您的账户以继续</p>
         </div>
 
+        {success && <div className="success-message">{success}</div>}
         {error && <div className="error-message">{error}</div>}
 
         <form className="auth-form" onSubmit={handleSubmit}>
