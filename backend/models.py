@@ -1,7 +1,15 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Table
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
+
+
+note_tags = Table(
+    "note_tags",
+    Base.metadata,
+    Column("note_id", Integer, ForeignKey("notes.id"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id"), primary_key=True)
+)
 
 
 class User(Base):
@@ -17,6 +25,20 @@ class User(Base):
 
     notes = relationship("Note", back_populates="owner")
     files = relationship("File", back_populates="owner")
+    tags = relationship("Tag", back_populates="owner")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False)
+    color = Column(String(7), default="#3498db")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    user_id = Column(Integer, ForeignKey("users.id"))
+
+    owner = relationship("User", back_populates="tags")
+    notes = relationship("Note", secondary=note_tags, back_populates="tags")
 
 
 class Note(Base):
@@ -30,6 +52,7 @@ class Note(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
 
     owner = relationship("User", back_populates="notes")
+    tags = relationship("Tag", secondary=note_tags, back_populates="notes")
 
 
 class File(Base):

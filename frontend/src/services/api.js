@@ -58,8 +58,10 @@ export const authApi = {
 }
 
 export const noteApi = {
-  getNotes: (search = '') => {
-    const params = search ? { search } : {}
+  getNotes: (search = '', tagId = null) => {
+    const params = {}
+    if (search) params.search = search
+    if (tagId) params.tag_id = tagId
     return api.get('/notes', { params })
   },
 
@@ -77,6 +79,36 @@ export const noteApi = {
 
   deleteNote: (id) => {
     return api.delete(`/notes/${id}`)
+  },
+
+  addTags: (noteId, tagIds) => {
+    return api.post(`/notes/${noteId}/tags`, { tag_ids: tagIds })
+  },
+
+  updateTags: (noteId, tagIds) => {
+    return api.put(`/notes/${noteId}/tags`, { tag_ids: tagIds })
+  },
+
+  removeTag: (noteId, tagId) => {
+    return api.delete(`/notes/${noteId}/tags/${tagId}`)
+  },
+}
+
+export const tagApi = {
+  getTags: () => {
+    return api.get('/tags')
+  },
+
+  createTag: (tag) => {
+    return api.post('/tags', tag)
+  },
+
+  updateTag: (id, tag) => {
+    return api.put(`/tags/${id}`, tag)
+  },
+
+  deleteTag: (id) => {
+    return api.delete(`/tags/${id}`)
   },
 }
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import timedelta
 import os
@@ -12,13 +12,14 @@ import io
 from pathlib import Path
 
 from database import engine, Base, get_db
-from models import Note as NoteModel, User as UserModel, File as FileModel
+from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
 from schemas import (
-    Note, NoteCreate, NoteUpdate,
+    Note, NoteCreate, NoteUpdate, NoteTagRequest,
     UserCreate, UserLogin, UserResponse, Token,
     FileResponse as FileSchema, FileUploadResponse,
     FileDeleteResponse, FileBatchDeleteRequest,
-    DocumentPreviewResponse
+    DocumentPreviewResponse,
+    Tag, TagCreate, TagUpdate
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -111,18 +112,112 @@ def get_current_user_info(current_user: UserModel = Depends(get_current_active_u
     return current_user
 
 
-@app.get("/api/notes", response_model=List[Note])
-def get_notes(
-    search: Optional[str] = Query(None, description="关键词搜索"),
+@app.get("/api/tags", response_model=List[Tag])
+def get_tags(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    query = db.query(NoteModel).filter(NoteModel.user_id == current_user.id)
+    tags = db.query(TagModel).filter(
+        TagModel.user_id == current_user.id
+    ).order_by(TagModel.created_at.desc()).all()
+    return tags
+
+
+@app.post("/api/tags", response_model=Tag, status_code=status.HTTP_201_CREATED)
+def create_tag(
+    tag: TagCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    existing_tag = db.query(TagModel).filter(
+        TagModel.name == tag.name.strip(),
+        TagModel.user_id == current_user.id
+    ).first()
+    if existing_tag:
+        raise HTTPException(status_code=400, detail="该标签已存在")
+
+    db_tag = TagModel(
+        name=tag.name.strip(),
+        color=tag.color,
+        user_id=current_user.id
+    )
+    db.add(db_tag)
+    db.commit()
+    db.refresh(db_tag)
+    return db_tag
+
+
+@app.put("/api/tags/{tag_id}", response_model=Tag)
+def update_tag(
+    tag_id: int,
+    tag: TagUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_tag = db.query(TagModel).filter(
+        TagModel.id == tag_id,
+        TagModel.user_id == current_user.id
+    ).first()
+    if not db_tag:
+        raise HTTPException(status_code=404, detail="标签不存在")
+
+    if tag.name is not None:
+        existing_tag = db.query(TagModel).filter(
+            TagModel.name == tag.name.strip(),
+            TagModel.id != tag_id,
+            TagModel.user_id == current_user.id
+        ).first()
+        if existing_tag:
+            raise HTTPException(status_code=400, detail="该标签名称已存在")
+        db_tag.name = tag.name.strip()
+
+    if tag.color is not None:
+        db_tag.color = tag.color
+
+    db.commit()
+    db.refresh(db_tag)
+    return db_tag
+
+
+@app.delete("/api/tags/{tag_id}")
+def delete_tag(
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_tag = db.query(TagModel).filter(
+        TagModel.id == tag_id,
+        TagModel.user_id == current_user.id
+    ).first()
+    if not db_tag:
+        raise HTTPException(status_code=404, detail="标签不存在")
+
+    db.delete(db_tag)
+    db.commit()
+    return {"message": "标签删除成功"}
+
+
+@app.get("/api/notes", response_model=List[Note])
+def get_notes(
+    search: Optional[str] = Query(None, description="关键词搜索"),
+    tag_id: Optional[int] = Query(None, description="按标签筛选"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.user_id == current_user.id)
     if search:
         query = query.filter(
             (NoteModel.title.contains(search)) |
             (NoteModel.content.contains(search))
         )
+    if tag_id:
+        tag = db.query(TagModel).filter(
+            TagModel.id == tag_id,
+            TagModel.user_id == current_user.id
+        ).first()
+        if not tag:
+            raise HTTPException(status_code=404, detail="标签不存在")
+        query = query.filter(NoteModel.tags.contains(tag))
     notes = query.order_by(NoteModel.updated_at.desc().nullslast(), NoteModel.created_at.desc()).all()
     return notes
 
@@ -133,7 +228,7 @@ def get_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    note = db.query(NoteModel).filter(
+    note = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
         NoteModel.id == note_id,
         NoteModel.user_id == current_user.id
     ).first()
@@ -167,10 +262,16 @@ def create_note(
         content=note.content.strip(),
         user_id=current_user.id
     )
+    if note.tag_ids:
+        tags = db.query(TagModel).filter(
+            TagModel.id.in_(note.tag_ids),
+            TagModel.user_id == current_user.id
+        ).all()
+        db_note.tags = tags
     db.add(db_note)
     db.commit()
     db.refresh(db_note)
-    return db_note
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == db_note.id).first()
 
 
 @app.put("/api/notes/{note_id}", response_model=Note)
@@ -193,10 +294,16 @@ def update_note(
         db_note.title = note.title.strip()
     if note.content is not None:
         db_note.content = note.content.strip()
+    if note.tag_ids is not None:
+        tags = db.query(TagModel).filter(
+            TagModel.id.in_(note.tag_ids),
+            TagModel.user_id == current_user.id
+        ).all()
+        db_note.tags = tags
 
     db.commit()
     db.refresh(db_note)
-    return db_note
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
 
 
 @app.delete("/api/notes/{note_id}")
@@ -215,6 +322,84 @@ def delete_note(
     db.delete(db_note)
     db.commit()
     return {"message": "笔记删除成功"}
+
+
+@app.post("/api/notes/{note_id}/tags", response_model=Note)
+def add_tags_to_note(
+    note_id: int,
+    request: NoteTagRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    tags = db.query(TagModel).filter(
+        TagModel.id.in_(request.tag_ids),
+        TagModel.user_id == current_user.id
+    ).all()
+    for tag in tags:
+        if tag not in db_note.tags:
+            db_note.tags.append(tag)
+
+    db.commit()
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+
+
+@app.put("/api/notes/{note_id}/tags", response_model=Note)
+def update_note_tags(
+    note_id: int,
+    request: NoteTagRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    tags = db.query(TagModel).filter(
+        TagModel.id.in_(request.tag_ids),
+        TagModel.user_id == current_user.id
+    ).all()
+    db_note.tags = tags
+
+    db.commit()
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+
+
+@app.delete("/api/notes/{note_id}/tags/{tag_id}", response_model=Note)
+def remove_tag_from_note(
+    note_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    tag = db.query(TagModel).filter(
+        TagModel.id == tag_id,
+        TagModel.user_id == current_user.id
+    ).first()
+    if not tag:
+        raise HTTPException(status_code=404, detail="标签不存在")
+
+    if tag in db_note.tags:
+        db_note.tags.remove(tag)
+        db.commit()
+
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
 
 
 def get_file_extension(filename: str) -> str:

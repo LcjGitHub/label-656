@@ -2,25 +2,30 @@ import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
-import { noteApi } from './services/api.js'
+import TagManager from './components/TagManager.jsx'
+import { noteApi, tagApi } from './services/api.js'
 import { useAuth } from './context/AuthContext.jsx'
 
 function App() {
   const [notes, setNotes] = useState([])
+  const [tags, setTags] = useState([])
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [selectedTagId, setSelectedTagId] = useState(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isTagManagerOpen, setIsTagManagerOpen] = useState(false)
   const [editingNote, setEditingNote] = useState(null)
   const [error, setError] = useState('')
   const [modalError, setModalError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [tagsLoading, setTagsLoading] = useState(true)
   const { user, logout } = useAuth()
   const location = useLocation()
 
-  const fetchNotes = async (search = '') => {
+  const fetchNotes = async (search = '', tagId = null) => {
     try {
       setLoading(true)
       setError('')
-      const response = await noteApi.getNotes(search)
+      const response = await noteApi.getNotes(search, tagId)
       setNotes(response.data)
     } catch (err) {
       setError('加载笔记失败，请稍后重试')
@@ -30,14 +35,40 @@ function App() {
     }
   }
 
+  const fetchTags = async () => {
+    try {
+      setTagsLoading(true)
+      const response = await tagApi.getTags()
+      setTags(response.data)
+    } catch (err) {
+      console.error('Error fetching tags:', err)
+    } finally {
+      setTagsLoading(false)
+    }
+  }
+
   useEffect(() => {
-    fetchNotes(searchKeyword)
-  }, [searchKeyword])
+    fetchNotes(searchKeyword, selectedTagId)
+  }, [searchKeyword, selectedTagId])
+
+  useEffect(() => {
+    fetchTags()
+  }, [])
 
   const handleSearch = (e) => {
     setSearchKeyword(e.target.value)
     setNotes([])
     setLoading(true)
+  }
+
+  const handleTagFilter = (tagId) => {
+    setSelectedTagId(tagId === selectedTagId ? null : tagId)
+    setNotes([])
+    setLoading(true)
+  }
+
+  const handleTagClick = (tag) => {
+    handleTagFilter(tag.id)
   }
 
   const handleCreateNote = () => {
@@ -56,11 +87,25 @@ function App() {
     try {
       setError('')
       await noteApi.deleteNote(id)
-      await fetchNotes(searchKeyword)
+      await fetchNotes(searchKeyword, selectedTagId)
     } catch (err) {
       setError('删除笔记失败，请稍后重试')
       console.error('Error deleting note:', err)
     }
+  }
+
+  const handleRemoveTag = (noteId, tagId) => {
+    setNotes(prevNotes =>
+      prevNotes.map(note => {
+        if (note.id === noteId) {
+          return {
+            ...note,
+            tags: note.tags.filter(t => t.id !== tagId)
+          }
+        }
+        return note
+      })
+    )
   }
 
   const handleSubmitNote = async (noteData) => {
@@ -71,7 +116,8 @@ function App() {
       } else {
         await noteApi.createNote(noteData)
       }
-      await fetchNotes(searchKeyword)
+      await fetchNotes(searchKeyword, selectedTagId)
+      await fetchTags()
       setIsModalOpen(false)
       setEditingNote(null)
       setModalError('')
@@ -91,10 +137,26 @@ function App() {
     setModalError('')
   }
 
+  const handleTagsChange = (newTags) => {
+    setTags(newTags)
+  }
+
   const handleLogout = async () => {
     if (window.confirm('确定要退出登录吗？')) {
       await logout()
     }
+  }
+
+  const getContrastColor = (hexColor) => {
+    const r = parseInt(hexColor.slice(1, 3), 16)
+    const g = parseInt(hexColor.slice(3, 5), 16)
+    const b = parseInt(hexColor.slice(5, 7), 16)
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000
+    return brightness > 128 ? '#000000' : '#ffffff'
+  }
+
+  const getNoteCountForTag = (tagId) => {
+    return notes.filter(note => note.tags && note.tags.some(t => t.id === tagId)).length
   }
 
   return (
@@ -132,6 +194,35 @@ function App() {
 
       {error && <div className="error-message">{error}</div>}
 
+      {!tagsLoading && tags.length > 0 && (
+        <div className="tag-filter-section">
+          <div className="tag-filter-header">
+            <span className="tag-filter-title">🏷️ 标签筛选：</span>
+            <button
+              className={`filter-tag ${selectedTagId === null ? 'active' : ''}`}
+              onClick={() => handleTagFilter(null)}
+            >
+              全部
+            </button>
+            {tags.map((tag) => (
+              <button
+                key={tag.id}
+                className={`filter-tag ${selectedTagId === tag.id ? 'active' : ''}`}
+                style={{
+                  backgroundColor: selectedTagId === tag.id ? tag.color : 'transparent',
+                  borderColor: tag.color,
+                  color: selectedTagId === tag.id ? getContrastColor(tag.color) : tag.color,
+                }}
+                onClick={() => handleTagFilter(tag.id)}
+              >
+                {tag.name}
+                <span className="tag-count">{getNoteCountForTag(tag.id)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="toolbar">
         <input
           type="text"
@@ -140,6 +231,9 @@ function App() {
           value={searchKeyword}
           onChange={handleSearch}
         />
+        <button className="btn btn-secondary" onClick={() => setIsTagManagerOpen(true)}>
+          🏷️ 管理标签
+        </button>
         <button className="btn btn-primary" onClick={handleCreateNote}>
           + 新建笔记
         </button>
@@ -152,10 +246,10 @@ function App() {
       ) : notes.length === 0 ? (
         <div className="empty-state">
           <h3>
-            {searchKeyword ? '没有找到匹配的笔记' : '还没有笔记'}
+            {searchKeyword || selectedTagId ? '没有找到匹配的笔记' : '还没有笔记'}
           </h3>
           <p>
-            {searchKeyword
+            {searchKeyword || selectedTagId
               ? '试试其他关键词，或者创建一条新笔记'
               : '点击上方按钮创建你的第一条笔记'}
           </p>
@@ -169,6 +263,8 @@ function App() {
               searchKeyword={searchKeyword}
               onEdit={handleEditNote}
               onDelete={handleDeleteNote}
+              onRemoveTag={handleRemoveTag}
+              onTagClick={handleTagClick}
             />
           ))}
         </div>
@@ -180,6 +276,12 @@ function App() {
         onSubmit={handleSubmitNote}
         note={editingNote}
         error={modalError}
+      />
+
+      <TagManager
+        isOpen={isTagManagerOpen}
+        onClose={() => setIsTagManagerOpen(false)}
+        onTagsChange={handleTagsChange}
       />
     </div>
   )

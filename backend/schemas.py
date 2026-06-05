@@ -4,6 +4,69 @@ from typing import Optional, List
 import re
 
 
+class TagBase(BaseModel):
+    name: str
+    color: Optional[str] = "#3498db"
+
+    @field_validator('name')
+    def name_must_be_valid(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError('标签名称不能为空')
+        if len(v) > 50:
+            raise ValueError('标签名称长度不能超过50个字符')
+        return v
+
+    @field_validator('color')
+    def color_must_be_valid(cls, v):
+        if v and not v.startswith('#'):
+            raise ValueError('颜色必须以#开头')
+        if v and len(v) != 7:
+            raise ValueError('颜色格式必须为#RRGGBB')
+        return v
+
+
+class TagCreate(TagBase):
+    pass
+
+
+class TagUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+
+    @field_validator('name')
+    def name_must_be_valid(cls, v):
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError('标签名称不能为空')
+            if len(v) > 50:
+                raise ValueError('标签名称长度不能超过50个字符')
+        return v
+
+    @field_validator('color')
+    def color_must_be_valid(cls, v):
+        if v is not None:
+            if not v.startswith('#'):
+                raise ValueError('颜色必须以#开头')
+            if len(v) != 7:
+                raise ValueError('颜色格式必须为#RRGGBB')
+        return v
+
+
+class Tag(TagBase):
+    id: int
+    created_at: datetime
+    user_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class NoteTagRequest(BaseModel):
+    tag_ids: List[int]
+
+
 class UserBase(BaseModel):
     username: str
     email: EmailStr
@@ -58,12 +121,13 @@ class NoteBase(BaseModel):
 
 
 class NoteCreate(NoteBase):
-    pass
+    tag_ids: Optional[List[int]] = None
 
 
 class NoteUpdate(NoteBase):
     title: Optional[str] = None
     content: Optional[str] = None
+    tag_ids: Optional[List[int]] = None
 
 
 class Note(NoteBase):
@@ -71,6 +135,7 @@ class Note(NoteBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
     user_id: Optional[int] = None
+    tags: Optional[List[Tag]] = None
 
     class Config:
         from_attributes = True
