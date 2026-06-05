@@ -136,9 +136,25 @@ class Note(NoteBase):
     updated_at: Optional[datetime] = None
     user_id: Optional[int] = None
     tags: Optional[List[Tag]] = None
+    is_favorited: int = 0
+    favorited_at: Optional[datetime] = None
+    is_pinned: int = 0
+    pin_priority: int = 0
+    pinned_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class NoteBatchFavoriteRequest(BaseModel):
+    note_ids: List[int]
+    is_favorited: bool
+
+
+class NoteBatchPinRequest(BaseModel):
+    note_ids: List[int]
+    is_pinned: bool
+    pin_priority: Optional[int] = 0
 
 
 class FileBase(BaseModel):

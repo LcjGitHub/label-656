@@ -50,6 +50,11 @@ class Note(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     user_id = Column(Integer, ForeignKey("users.id"))
+    is_favorited = Column(Integer, default=0)
+    favorited_at = Column(DateTime(timezone=True))
+    is_pinned = Column(Integer, default=0)
+    pin_priority = Column(Integer, default=0)
+    pinned_at = Column(DateTime(timezone=True))
 
     owner = relationship("User", back_populates="notes")
     tags = relationship("Tag", secondary=note_tags, back_populates="notes")

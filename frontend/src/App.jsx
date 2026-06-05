@@ -23,10 +23,14 @@ function App() {
   const { user, logout } = useAuth()
   const location = useLocation()
 
+  const [viewMode, setViewMode] = useState('all')
+  const [selectedNoteIds, setSelectedNoteIds] = useState([])
+  const [selectMode, setSelectMode] = useState(false)
+
   const fetchAllNotes = async () => {
     try {
       setAllNotesLoading(true)
-      const response = await noteApi.getNotes('', null)
+      const response = await noteApi.getNotes('', null, false, false)
       setAllNotes(response.data)
     } catch (err) {
       console.error('Error fetching all notes:', err)
@@ -39,7 +43,14 @@ function App() {
     try {
       setLoading(true)
       setError('')
-      const response = await noteApi.getNotes(search, tagId)
+      let response
+      if (viewMode === 'favorites') {
+        response = await noteApi.getFavoriteNotes(search, tagId)
+      } else if (viewMode === 'pinned') {
+        response = await noteApi.getPinnedNotes(search, tagId)
+      } else {
+        response = await noteApi.getNotes(search, tagId, false, false)
+      }
       setNotes(response.data)
     } catch (err) {
       setError('加载笔记失败，请稍后重试')
@@ -71,7 +82,7 @@ function App() {
 
   useEffect(() => {
     fetchNotes(searchKeyword, selectedTagId)
-  }, [searchKeyword, selectedTagId])
+  }, [searchKeyword, selectedTagId, viewMode])
 
   useEffect(() => {
     fetchAllNotes()
@@ -110,6 +121,7 @@ function App() {
     try {
       setError('')
       await noteApi.deleteNote(id)
+      setSelectedNoteIds(prev => prev.filter(noteId => noteId !== id))
       await Promise.all([
         fetchAllNotes(),
         fetchNotes(searchKeyword, selectedTagId),
@@ -143,6 +155,182 @@ function App() {
         return note
       })
     )
+  }
+
+  const handleFavoriteToggle = (updatedNote) => {
+    setNotes(prevNotes =>
+      prevNotes.map(note =>
+        note.id === updatedNote.id ? updatedNote : note
+      )
+    )
+    setAllNotes(prevAllNotes =>
+      prevAllNotes.map(note =>
+        note.id === updatedNote.id ? updatedNote : note
+      )
+    )
+  }
+
+  const handlePinToggle = (updatedNote) => {
+    setNotes(prevNotes => {
+      const newNotes = prevNotes.map(note =>
+        note.id === updatedNote.id ? updatedNote : note
+      )
+      return newNotes.sort((a, b) => {
+        if (b.is_pinned !== a.is_pinned) return b.is_pinned - a.is_pinned
+        if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
+        return 0
+      })
+    })
+    setAllNotes(prevAllNotes =>
+      prevAllNotes.map(note =>
+        note.id === updatedNote.id ? updatedNote : note
+      )
+    )
+  }
+
+  const handleSelectNote = (noteId, checked) => {
+    setSelectedNoteIds(prev => {
+      if (checked) {
+        return [...prev, noteId]
+      } else {
+        return prev.filter(id => id !== noteId)
+      }
+    })
+  }
+
+  const handleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedNoteIds(notes.map(note => note.id))
+    } else {
+      setSelectedNoteIds([])
+    }
+  }
+
+  const handleBatchFavorite = async (isFavorited) => {
+    if (selectedNoteIds.length === 0) {
+      alert('请先选择要操作的笔记')
+      return
+    }
+    const action = isFavorited ? '收藏' : '取消收藏'
+    if (!window.confirm(`确定要${action}选中的 ${selectedNoteIds.length} 条笔记吗？`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.batchSetFavorite(selectedNoteIds, isFavorited)
+      const updatedNotes = response.data
+      setNotes(prevNotes => {
+        const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
+        return prevNotes.map(note => noteMap.get(note.id) || note)
+      })
+      setAllNotes(prevAllNotes => {
+        const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
+        return prevAllNotes.map(note => noteMap.get(note.id) || note)
+      })
+      if (!isFavorited && viewMode === 'favorites') {
+        await fetchNotes(searchKeyword, selectedTagId)
+      }
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(`成功${action} ${updatedNotes.length} 条笔记`)
+    } catch (err) {
+      setError(`批量${action}失败，请稍后重试`)
+      console.error('Error batch favorite:', err)
+    }
+  }
+
+  const handleBatchPin = async (isPinned) => {
+    if (selectedNoteIds.length === 0) {
+      alert('请先选择要操作的笔记')
+      return
+    }
+    const action = isPinned ? '置顶' : '取消置顶'
+    if (!window.confirm(`确定要${action}选中的 ${selectedNoteIds.length} 条笔记吗？`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.batchSetPin(selectedNoteIds, isPinned)
+      const updatedNotes = response.data
+      setNotes(prevNotes => {
+        const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
+        return prevNotes.map(note => noteMap.get(note.id) || note)
+          .sort((a, b) => {
+            if (b.is_pinned !== a.is_pinned) return b.is_pinned - a.is_pinned
+            if (b.pin_priority !== a.pin_priority) return b.pin_priority - a.pin_priority
+            return 0
+          })
+      })
+      setAllNotes(prevAllNotes => {
+        const noteMap = new Map(updatedNotes.map(n => [n.id, n]))
+        return prevAllNotes.map(note => noteMap.get(note.id) || note)
+      })
+      if (!isPinned && viewMode === 'pinned') {
+        await fetchNotes(searchKeyword, selectedTagId)
+      }
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(`成功${action} ${updatedNotes.length} 条笔记`)
+    } catch (err) {
+      setError(`批量${action}失败，请稍后重试`)
+      console.error('Error batch pin:', err)
+    }
+  }
+
+  const handleUnpinAll = async () => {
+    const pinnedCount = allNotes.filter(n => n.is_pinned).length
+    if (pinnedCount === 0) {
+      alert('没有置顶的笔记')
+      return
+    }
+    if (!window.confirm(`确定要取消全部 ${pinnedCount} 条笔记的置顶吗？`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.unpinAll()
+      await refreshAllData()
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(response.data.message)
+    } catch (err) {
+      setError('取消全部置顶失败，请稍后重试')
+      console.error('Error unpin all:', err)
+    }
+  }
+
+  const handleBatchUnfavorite = async () => {
+    if (selectedNoteIds.length === 0) {
+      alert('请先选择要取消收藏的笔记')
+      return
+    }
+    if (!window.confirm(`确定要取消收藏选中的 ${selectedNoteIds.length} 条笔记吗？`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.batchUnfavorite(selectedNoteIds)
+      setAllNotes(prevAllNotes =>
+        prevAllNotes.map(note =>
+          selectedNoteIds.includes(note.id)
+            ? { ...note, is_favorited: 0, favorited_at: null }
+            : note
+        )
+      )
+      if (viewMode === 'favorites') {
+        await fetchNotes(searchKeyword, selectedTagId)
+      } else {
+        setNotes(prevNotes =>
+          prevNotes.map(note =>
+            selectedNoteIds.includes(note.id)
+              ? { ...note, is_favorited: 0, favorited_at: null }
+              : note
+          )
+        )
+      }
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(response.data.message)
+    } catch (err) {
+      setError('批量取消收藏失败，请稍后重试')
+      console.error('Error batch unfavorite:', err)
+    }
   }
 
   const handleSubmitNote = async (noteData) => {
@@ -205,6 +393,27 @@ function App() {
     return allNotes.filter(note => note.tags && note.tags.some(t => t.id === tagId)).length
   }
 
+  const getFavoriteCount = () => {
+    return allNotes.filter(note => note.is_favorited).length
+  }
+
+  const getPinnedCount = () => {
+    return allNotes.filter(note => note.is_pinned).length
+  }
+
+  const handleViewModeChange = (mode) => {
+    setViewMode(mode)
+    setSelectedNoteIds([])
+    setSelectMode(false)
+    setNotes([])
+    setLoading(true)
+  }
+
+  const toggleSelectMode = () => {
+    setSelectMode(!selectMode)
+    setSelectedNoteIds([])
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -239,6 +448,30 @@ function App() {
       </header>
 
       {error && <div className="error-message">{error}</div>}
+
+      <div className="view-tabs">
+        <button
+          className={`view-tab ${viewMode === 'all' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('all')}
+        >
+          📝 全部笔记
+          <span className="tab-count">{allNotes.length}</span>
+        </button>
+        <button
+          className={`view-tab ${viewMode === 'favorites' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('favorites')}
+        >
+          ⭐ 收藏笔记
+          <span className="tab-count">{getFavoriteCount()}</span>
+        </button>
+        <button
+          className={`view-tab ${viewMode === 'pinned' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('pinned')}
+        >
+          📌 置顶笔记
+          <span className="tab-count">{getPinnedCount()}</span>
+        </button>
+      </div>
 
       {!tagsLoading && tags.length > 0 && (
         <div className="tag-filter-section">
@@ -277,6 +510,9 @@ function App() {
           value={searchKeyword}
           onChange={handleSearch}
         />
+        <button className="btn btn-secondary" onClick={toggleSelectMode}>
+          {selectMode ? '❌ 取消选择' : '☑️ 批量操作'}
+        </button>
         <button className="btn btn-secondary" onClick={() => setIsTagManagerOpen(true)}>
           🏷️ 管理标签
         </button>
@@ -285,6 +521,64 @@ function App() {
         </button>
       </div>
 
+      {selectMode && (
+        <div className="batch-actions">
+          <label className="select-all-label">
+            <input
+              type="checkbox"
+              checked={selectedNoteIds.length === notes.length && notes.length > 0}
+              onChange={(e) => handleSelectAll(e.target.checked)}
+            />
+            全选
+          </label>
+          <span className="selected-count">
+            已选择 {selectedNoteIds.length} 条笔记
+          </span>
+          <button
+            className="btn btn-primary btn-small"
+            onClick={() => handleBatchFavorite(true)}
+            disabled={selectedNoteIds.length === 0}
+          >
+            ⭐ 批量收藏
+          </button>
+          <button
+            className="btn btn-secondary btn-small"
+            onClick={() => handleBatchFavorite(false)}
+            disabled={selectedNoteIds.length === 0}
+          >
+            ☆ 取消收藏
+          </button>
+          <button
+            className="btn btn-primary btn-small"
+            onClick={() => handleBatchPin(true)}
+            disabled={selectedNoteIds.length === 0}
+          >
+            📌 批量置顶
+          </button>
+          <button
+            className="btn btn-secondary btn-small"
+            onClick={() => handleBatchPin(false)}
+            disabled={selectedNoteIds.length === 0}
+          >
+            📍 取消置顶
+          </button>
+          <button
+            className="btn btn-warning btn-small"
+            onClick={handleUnpinAll}
+            disabled={getPinnedCount() === 0}
+          >
+            🔽 取消全部置顶
+          </button>
+          <button
+            className="btn btn-danger btn-small"
+            onClick={handleBatchUnfavorite}
+            disabled={selectedNoteIds.length === 0}
+          >
+            💔 批量取消收藏
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="empty-state">
           <p>加载中...</p>
@@ -292,12 +586,22 @@ function App() {
       ) : notes.length === 0 ? (
         <div className="empty-state">
           <h3>
-            {searchKeyword || selectedTagId ? '没有找到匹配的笔记' : '还没有笔记'}
+            {searchKeyword || selectedTagId
+              ? '没有找到匹配的笔记'
+              : viewMode === 'favorites'
+                ? '还没有收藏的笔记'
+                : viewMode === 'pinned'
+                  ? '还没有置顶的笔记'
+                  : '还没有笔记'}
           </h3>
           <p>
             {searchKeyword || selectedTagId
               ? '试试其他关键词，或者创建一条新笔记'
-              : '点击上方按钮创建你的第一条笔记'}
+              : viewMode === 'favorites'
+                ? '点击笔记卡片上的 ⭐ 按钮收藏笔记'
+                : viewMode === 'pinned'
+                  ? '点击笔记卡片上的 📍 按钮置顶笔记'
+                  : '点击上方按钮创建你的第一条笔记'}
           </p>
         </div>
       ) : (
@@ -311,6 +615,11 @@ function App() {
               onDelete={handleDeleteNote}
               onRemoveTag={handleRemoveTag}
               onTagClick={handleTagClick}
+              onFavoriteToggle={handleFavoriteToggle}
+              onPinToggle={handlePinToggle}
+              selectable={selectMode}
+              selected={selectedNoteIds.includes(note.id)}
+              onSelect={handleSelectNote}
             />
           ))}
         </div>

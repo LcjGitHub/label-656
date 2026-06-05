@@ -12,7 +12,19 @@ const getContrastColor = (hexColor) => {
   return brightness > 128 ? '#000000' : '#ffffff'
 }
 
-const NoteCard = ({ note, searchKeyword, onEdit, onDelete, onRemoveTag, onTagClick }) => {
+const NoteCard = ({
+  note,
+  searchKeyword,
+  onEdit,
+  onDelete,
+  onRemoveTag,
+  onTagClick,
+  onFavoriteToggle,
+  onPinToggle,
+  selectable = false,
+  selected = false,
+  onSelect,
+}) => {
   const formatDate = (dateString) => {
     if (!dateString) return ''
     const date = new Date(dateString)
@@ -40,6 +52,32 @@ const NoteCard = ({ note, searchKeyword, onEdit, onDelete, onRemoveTag, onTagCli
     )
   }
 
+  const handleFavoriteToggle = async (e) => {
+    e.stopPropagation()
+    try {
+      const response = await noteApi.toggleFavorite(note.id)
+      if (onFavoriteToggle) {
+        onFavoriteToggle(response.data)
+      }
+    } catch (err) {
+      console.error('Error toggling favorite:', err)
+      alert('操作失败，请稍后重试')
+    }
+  }
+
+  const handlePinToggle = async (e) => {
+    e.stopPropagation()
+    try {
+      const response = await noteApi.togglePin(note.id)
+      if (onPinToggle) {
+        onPinToggle(response.data)
+      }
+    } catch (err) {
+      console.error('Error toggling pin:', err)
+      alert('操作失败，请稍后重试')
+    }
+  }
+
   const handleRemoveTag = async (tagId, e) => {
     e.stopPropagation()
     if (!window.confirm('确定要从这条笔记中移除该标签吗？')) return
@@ -61,20 +99,52 @@ const NoteCard = ({ note, searchKeyword, onEdit, onDelete, onRemoveTag, onTagCli
     }
   }
 
+  const handleSelect = (e) => {
+    e.stopPropagation()
+    if (onSelect) {
+      onSelect(note.id, e.target.checked)
+    }
+  }
+
   return (
-    <div className="note-card">
+    <div className={`note-card ${note.is_pinned ? 'pinned' : ''} ${note.is_favorited ? 'favorited' : ''} ${selected ? 'selected' : ''}`}>
+      {selectable && (
+        <div className="note-checkbox">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={handleSelect}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
       <div className="note-header">
         <h3 className="note-title">
+          {note.is_pinned && <span className="pin-indicator" title="已置顶">📌</span>}
           {note.title && note.title.trim()
             ? highlightText(note.title, searchKeyword)
             : <span style={{ color: '#95a5a6', fontStyle: 'italic' }}>无标题</span>
           }
         </h3>
         <div className="note-actions">
-          <button className="btn btn-edit" onClick={() => onEdit(note)}>
+          <button
+            className={`btn-icon ${note.is_favorited ? 'active' : ''}`}
+            onClick={handleFavoriteToggle}
+            title={note.is_favorited ? '取消收藏' : '收藏'}
+          >
+            {note.is_favorited ? '⭐' : '☆'}
+          </button>
+          <button
+            className={`btn-icon ${note.is_pinned ? 'active' : ''}`}
+            onClick={handlePinToggle}
+            title={note.is_pinned ? '取消置顶' : '置顶'}
+          >
+            {note.is_pinned ? '📌' : '📍'}
+          </button>
+          <button className="btn btn-edit" onClick={(e) => { e.stopPropagation(); onEdit(note); }}>
             编辑
           </button>
-          <button className="btn btn-danger" onClick={() => onDelete(note.id)}>
+          <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); onDelete(note.id); }}>
             删除
           </button>
         </div>
@@ -113,6 +183,12 @@ const NoteCard = ({ note, searchKeyword, onEdit, onDelete, onRemoveTag, onTagCli
         <span>创建: {formatDate(note.created_at)}</span>
         {note.updated_at && (
           <span>更新: {formatDate(note.updated_at)}</span>
+        )}
+        {note.favorited_at && note.is_favorited && (
+          <span>收藏: {formatDate(note.favorited_at)}</span>
+        )}
+        {note.pinned_at && note.is_pinned && (
+          <span>置顶: {formatDate(note.pinned_at)}</span>
         )}
       </div>
     </div>

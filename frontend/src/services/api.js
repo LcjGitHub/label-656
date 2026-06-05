@@ -58,11 +58,27 @@ export const authApi = {
 }
 
 export const noteApi = {
-  getNotes: (search = '', tagId = null) => {
+  getNotes: (search = '', tagId = null, onlyFavorites = false, onlyPinned = false) => {
     const params = {}
     if (search) params.search = search
     if (tagId) params.tag_id = tagId
+    if (onlyFavorites) params.only_favorites = true
+    if (onlyPinned) params.only_pinned = true
     return api.get('/notes', { params })
+  },
+
+  getFavoriteNotes: (search = '', tagId = null) => {
+    const params = {}
+    if (search) params.search = search
+    if (tagId) params.tag_id = tagId
+    return api.get('/notes/favorites', { params })
+  },
+
+  getPinnedNotes: (search = '', tagId = null) => {
+    const params = {}
+    if (search) params.search = search
+    if (tagId) params.tag_id = tagId
+    return api.get('/notes/pinned', { params })
   },
 
   getNote: (id) => {
@@ -79,6 +95,30 @@ export const noteApi = {
 
   deleteNote: (id) => {
     return api.delete(`/notes/${id}`)
+  },
+
+  toggleFavorite: (noteId) => {
+    return api.put(`/notes/${noteId}/favorite`)
+  },
+
+  togglePin: (noteId, pinPriority = 0) => {
+    return api.put(`/notes/${noteId}/pin`, null, { params: { pin_priority: pinPriority } })
+  },
+
+  batchSetFavorite: (noteIds, isFavorited) => {
+    return api.put('/notes/batch/favorite', { note_ids: noteIds, is_favorited: isFavorited })
+  },
+
+  batchSetPin: (noteIds, isPinned, pinPriority = 0) => {
+    return api.put('/notes/batch/pin', { note_ids: noteIds, is_pinned: isPinned, pin_priority: pinPriority })
+  },
+
+  unpinAll: () => {
+    return api.put('/notes/unpin-all')
+  },
+
+  batchUnfavorite: (noteIds) => {
+    return api.put('/notes/batch/unfavorite', { note_ids: noteIds, is_favorited: false })
   },
 
   addTags: (noteId, tagIds) => {

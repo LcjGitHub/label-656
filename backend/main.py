@@ -15,6 +15,7 @@ from database import engine, Base, get_db
 from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
 from schemas import (
     Note, NoteCreate, NoteUpdate, NoteTagRequest,
+    NoteBatchFavoriteRequest, NoteBatchPinRequest,
     UserCreate, UserLogin, UserResponse, Token,
     FileResponse as FileSchema, FileUploadResponse,
     FileDeleteResponse, FileBatchDeleteRequest,
@@ -201,9 +202,12 @@ def delete_tag(
 def get_notes(
     search: Optional[str] = Query(None, description="关键词搜索"),
     tag_id: Optional[int] = Query(None, description="按标签筛选"),
+    only_favorites: Optional[bool] = Query(False, description="仅显示收藏笔记"),
+    only_pinned: Optional[bool] = Query(False, description="仅显示置顶笔记"),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
+    from sqlalchemy import func
     query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.user_id == current_user.id)
     if search:
         query = query.filter(
@@ -218,8 +222,244 @@ def get_notes(
         if not tag:
             raise HTTPException(status_code=404, detail="标签不存在")
         query = query.filter(NoteModel.tags.contains(tag))
-    notes = query.order_by(NoteModel.updated_at.desc().nullslast(), NoteModel.created_at.desc()).all()
+    if only_favorites:
+        query = query.filter(NoteModel.is_favorited == 1)
+    if only_pinned:
+        query = query.filter(NoteModel.is_pinned == 1)
+    notes = query.order_by(
+        NoteModel.is_pinned.desc(),
+        NoteModel.pin_priority.desc(),
+        NoteModel.pinned_at.desc().nullslast(),
+        NoteModel.updated_at.desc().nullslast(),
+        NoteModel.created_at.desc()
+    ).all()
     return notes
+
+
+@app.get("/api/notes/favorites", response_model=List[Note])
+def get_favorite_notes(
+    search: Optional[str] = Query(None, description="关键词搜索"),
+    tag_id: Optional[int] = Query(None, description="按标签筛选"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.user_id == current_user.id,
+        NoteModel.is_favorited == 1
+    )
+    if search:
+        query = query.filter(
+            (NoteModel.title.contains(search)) |
+            (NoteModel.content.contains(search))
+        )
+    if tag_id:
+        tag = db.query(TagModel).filter(
+            TagModel.id == tag_id,
+            TagModel.user_id == current_user.id
+        ).first()
+        if not tag:
+            raise HTTPException(status_code=404, detail="标签不存在")
+        query = query.filter(NoteModel.tags.contains(tag))
+    notes = query.order_by(
+        NoteModel.favorited_at.desc().nullslast(),
+        NoteModel.updated_at.desc().nullslast(),
+        NoteModel.created_at.desc()
+    ).all()
+    return notes
+
+
+@app.get("/api/notes/pinned", response_model=List[Note])
+def get_pinned_notes(
+    search: Optional[str] = Query(None, description="关键词搜索"),
+    tag_id: Optional[int] = Query(None, description="按标签筛选"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.user_id == current_user.id,
+        NoteModel.is_pinned == 1
+    )
+    if search:
+        query = query.filter(
+            (NoteModel.title.contains(search)) |
+            (NoteModel.content.contains(search))
+        )
+    if tag_id:
+        tag = db.query(TagModel).filter(
+            TagModel.id == tag_id,
+            TagModel.user_id == current_user.id
+        ).first()
+        if not tag:
+            raise HTTPException(status_code=404, detail="标签不存在")
+        query = query.filter(NoteModel.tags.contains(tag))
+    notes = query.order_by(
+        NoteModel.pin_priority.desc(),
+        NoteModel.pinned_at.desc().nullslast(),
+        NoteModel.updated_at.desc().nullslast(),
+        NoteModel.created_at.desc()
+    ).all()
+    return notes
+
+
+@app.put("/api/notes/{note_id}/favorite", response_model=Note)
+def toggle_note_favorite(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    db_note.is_favorited = 0 if db_note.is_favorited == 1 else 1
+    db_note.favorited_at = func.now() if db_note.is_favorited == 1 else None
+
+    db.commit()
+    db.refresh(db_note)
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+
+
+@app.put("/api/notes/{note_id}/pin", response_model=Note)
+def toggle_note_pin(
+    note_id: int,
+    pin_priority: Optional[int] = Query(0, description="置顶优先级，数值越大越靠前"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    db_note.is_pinned = 0 if db_note.is_pinned == 1 else 1
+    db_note.pinned_at = func.now() if db_note.is_pinned == 1 else None
+    if db_note.is_pinned == 1:
+        db_note.pin_priority = pin_priority
+
+    db.commit()
+    db.refresh(db_note)
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+
+
+@app.put("/api/notes/batch/favorite", response_model=List[Note])
+def batch_set_favorite(
+    request: NoteBatchFavoriteRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    if not request.note_ids:
+        raise HTTPException(status_code=400, detail="请选择要操作的笔记")
+
+    notes = db.query(NoteModel).filter(
+        NoteModel.id.in_(request.note_ids),
+        NoteModel.user_id == current_user.id
+    ).all()
+
+    if not notes:
+        raise HTTPException(status_code=404, detail="未找到要操作的笔记")
+
+    for note in notes:
+        note.is_favorited = 1 if request.is_favorited else 0
+        note.favorited_at = func.now() if request.is_favorited else None
+
+    db.commit()
+
+    note_ids = [note.id for note in notes]
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.id.in_(note_ids)
+    ).order_by(NoteModel.favorited_at.desc().nullslast()).all()
+
+
+@app.put("/api/notes/batch/pin", response_model=List[Note])
+def batch_set_pin(
+    request: NoteBatchPinRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    if not request.note_ids:
+        raise HTTPException(status_code=400, detail="请选择要操作的笔记")
+
+    notes = db.query(NoteModel).filter(
+        NoteModel.id.in_(request.note_ids),
+        NoteModel.user_id == current_user.id
+    ).all()
+
+    if not notes:
+        raise HTTPException(status_code=404, detail="未找到要操作的笔记")
+
+    for note in notes:
+        note.is_pinned = 1 if request.is_pinned else 0
+        note.pinned_at = func.now() if request.is_pinned else None
+        if request.is_pinned:
+            note.pin_priority = request.pin_priority or 0
+
+    db.commit()
+
+    note_ids = [note.id for note in notes]
+    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.id.in_(note_ids)
+    ).order_by(NoteModel.pin_priority.desc(), NoteModel.pinned_at.desc().nullslast()).all()
+
+
+@app.put("/api/notes/unpin-all")
+def unpin_all_notes(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    notes = db.query(NoteModel).filter(
+        NoteModel.user_id == current_user.id,
+        NoteModel.is_pinned == 1
+    ).all()
+
+    if not notes:
+        return {"message": "没有置顶的笔记", "unpinned_count": 0}
+
+    for note in notes:
+        note.is_pinned = 0
+        note.pinned_at = None
+        note.pin_priority = 0
+
+    db.commit()
+
+    return {"message": f"成功取消 {len(notes)} 条笔记的置顶", "unpinned_count": len(notes)}
+
+
+@app.put("/api/notes/batch/unfavorite")
+def batch_unfavorite_notes(
+    request: NoteBatchFavoriteRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    if not request.note_ids:
+        raise HTTPException(status_code=400, detail="请选择要取消收藏的笔记")
+
+    notes = db.query(NoteModel).filter(
+        NoteModel.id.in_(request.note_ids),
+        NoteModel.user_id == current_user.id,
+        NoteModel.is_favorited == 1
+    ).all()
+
+    if not notes:
+        raise HTTPException(status_code=404, detail="未找到要取消收藏的笔记")
+
+    for note in notes:
+        note.is_favorited = 0
+        note.favorited_at = None
+
+    db.commit()
+
+    return {"message": f"成功取消 {len(notes)} 条笔记的收藏", "unfavorited_count": len(notes)}
 
 
 @app.get("/api/notes/{note_id}", response_model=Note)
