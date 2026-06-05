@@ -9,7 +9,8 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingNote, setEditingNote] = useState(null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [modalError, setModalError] = useState('')
+  const [loading, setLoading] = useState(true)
 
   const fetchNotes = async (search = '') => {
     try {
@@ -60,7 +61,7 @@ function App() {
 
   const handleSubmitNote = async (noteData) => {
     try {
-      setError('')
+      setModalError('')
       if (editingNote) {
         await noteApi.updateNote(editingNote.id, noteData)
       } else {
@@ -69,11 +70,12 @@ function App() {
       await fetchNotes(searchKeyword)
       setIsModalOpen(false)
       setEditingNote(null)
+      setModalError('')
     } catch (err) {
       if (err.response && err.response.data && err.response.data.detail) {
-        setError(err.response.data.detail)
+        setModalError(err.response.data.detail)
       } else {
-        setError('保存笔记失败，请稍后重试')
+        setModalError('保存笔记失败，请稍后重试')
       }
       console.error('Error saving note:', err)
     }
@@ -82,7 +84,7 @@ function App() {
   const handleCloseModal = () => {
     setIsModalOpen(false)
     setEditingNote(null)
-    setError('')
+    setModalError('')
   }
 
   return (
@@ -141,7 +143,7 @@ function App() {
         onClose={handleCloseModal}
         onSubmit={handleSubmitNote}
         note={editingNote}
-        error={error}
+        error={modalError}
       />
     </div>
   )

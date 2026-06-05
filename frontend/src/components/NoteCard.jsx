@@ -34,7 +34,10 @@ const NoteCard = ({ note, searchKeyword, onEdit, onDelete }) => {
     <div className="note-card">
       <div className="note-header">
         <h3 className="note-title">
-          {highlightText(note.title, searchKeyword)}
+          {note.title && note.title.trim()
+            ? highlightText(note.title, searchKeyword)
+            : <span style={{ color: '#95a5a6', fontStyle: 'italic' }}>无标题</span>
+          }
         </h3>
         <div className="note-actions">
           <button className="btn btn-edit" onClick={() => onEdit(note)}>
