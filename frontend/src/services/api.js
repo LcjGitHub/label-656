@@ -186,6 +186,48 @@ export const noteApi = {
       responseType: 'blob'
     })
   },
+
+  enableShare: (noteId, password = null, expiresDays = null) => {
+    return api.post(`/notes/${noteId}/share`, {
+      password,
+      expires_days: expiresDays
+    })
+  },
+
+  disableShare: (noteId) => {
+    return api.delete(`/notes/${noteId}/share`)
+  },
+
+  getShareInfo: (noteId) => {
+    return api.get(`/notes/${noteId}/share`)
+  },
+
+  getShareStats: (noteId) => {
+    return api.get(`/notes/${noteId}/share/stats`)
+  },
+
+  getShareQrcode: (noteId) => {
+    return api.get(`/notes/${noteId}/share/qrcode`, {
+      responseType: 'blob'
+    })
+  },
+}
+
+export const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+export const publicShareApi = {
+  getPublicNote: (token) => {
+    return publicApi.get(`/public/share/${token}`)
+  },
+
+  accessProtectedNote: (token, password) => {
+    return publicApi.post(`/public/share/${token}/access`, { password })
+  },
 }
 
 export const tagApi = {

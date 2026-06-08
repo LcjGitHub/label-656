@@ -142,9 +142,54 @@ class Note(NoteBase):
     is_pinned: int = 0
     pin_priority: int = 0
     pinned_at: Optional[datetime] = None
+    is_shared: int = 0
+    share_token: Optional[str] = None
+    share_password: Optional[str] = None
+    share_expires_at: Optional[datetime] = None
+    share_created_at: Optional[datetime] = None
+    share_view_count: int = 0
 
     class Config:
         from_attributes = True
+
+
+class NoteShareConfig(BaseModel):
+    password: Optional[str] = None
+    expires_days: Optional[int] = None
+
+
+class NoteShareResponse(BaseModel):
+    is_shared: int
+    share_token: Optional[str] = None
+    share_password: Optional[str] = None
+    share_expires_at: Optional[datetime] = None
+    share_created_at: Optional[datetime] = None
+    share_view_count: int = 0
+    share_url: Optional[str] = None
+
+
+class PublicShareNoteResponse(BaseModel):
+    id: int
+    title: str
+    content: str
+    content_plain: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    tags: Optional[List[Tag]] = None
+    owner_name: Optional[str] = None
+    owner_username: Optional[str] = None
+
+
+class SharePasswordRequest(BaseModel):
+    password: str
+
+
+class ShareStatsResponse(BaseModel):
+    view_count: int
+    share_created_at: Optional[datetime] = None
+    share_expires_at: Optional[datetime] = None
+    is_shared: int
+    recent_views: List[dict] = []
 
 
 class NoteBatchFavoriteRequest(BaseModel):

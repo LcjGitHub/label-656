@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, status, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, Query, status, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, inspect
 from typing import List, Optional
@@ -12,13 +12,15 @@ import csv
 import io
 import time
 import re
+import secrets
+import base64
 from pathlib import Path
 from urllib.parse import quote
 import bleach
 from html import unescape
 
 from database import engine, Base, get_db
-from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
+from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel, ShareView as ShareViewModel
 from schemas import (
     Note, NoteCreate, NoteUpdate, NoteTagRequest,
     NoteBatchFavoriteRequest, NoteBatchPinRequest,
@@ -27,7 +29,9 @@ from schemas import (
     FileDeleteResponse, FileBatchDeleteRequest,
     DocumentPreviewResponse,
     Tag, TagCreate, TagUpdate,
-    NoteExportRequest, NoteExportResponse
+    NoteExportRequest, NoteExportResponse,
+    NoteShareConfig, NoteShareResponse,
+    PublicShareNoteResponse, SharePasswordRequest, ShareStatsResponse
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -58,6 +62,20 @@ def run_database_migration():
                     )
             conn.commit()
             print(f"Migration: content_plain 字段已添加，回填 {len(notes)} 条记录")
+
+        share_columns = ["is_shared", "share_token", "share_password", "share_expires_at", "share_created_at", "share_view_count"]
+        for col in share_columns:
+            if col not in columns:
+                col_type = "INTEGER DEFAULT 0" if col in ("is_shared", "share_view_count") else "TEXT"
+                if col == "share_expires_at" or col == "share_created_at":
+                    col_type = "DATETIME"
+                conn.execute(text(f"ALTER TABLE notes ADD COLUMN {col} {col_type}"))
+                conn.commit()
+                print(f"Migration: {col} 字段已添加")
+
+        if not inspector.has_table("share_views"):
+            Base.metadata.create_all(bind=engine)
+            print("Migration: share_views 表已创建")
 
     except Exception as e:
         print(f"Database migration error: {e}")
@@ -1475,4 +1493,308 @@ def download_export_file(
         filename=safe_filename,
         media_type=media_type,
         headers={"Content-Disposition": content_disposition}
+    )
+
+
+def generate_share_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def get_share_url(note_id: int, token: str) -> str:
+    return f"/share/{token}"
+
+
+def is_share_expired(note) -> bool:
+    if note.share_expires_at is None:
+        return False
+    return datetime.utcnow() > note.share_expires_at
+
+
+def record_share_view(db: Session, note_id: int, request: Request):
+    try:
+        ip_address = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent", "")[:500]
+        db_view = ShareViewModel(
+            note_id=note_id,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        db.add(db_view)
+        db_note = db.query(NoteModel).filter(NoteModel.id == note_id).first()
+        if db_note:
+            db_note.share_view_count = (db_note.share_view_count or 0) + 1
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error recording share view: {e}")
+
+
+@app.post("/api/notes/{note_id}/share", response_model=NoteShareResponse)
+def enable_or_update_share(
+    note_id: int,
+    config: NoteShareConfig,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    from sqlalchemy import func
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    if not db_note.share_token:
+        db_note.share_token = generate_share_token()
+
+    db_note.is_shared = 1
+
+    if config.password:
+        if len(config.password) < 4:
+            raise HTTPException(status_code=400, detail="分享密码长度不能少于4位")
+        db_note.share_password = hash_password(config.password)
+    else:
+        db_note.share_password = None
+
+    if config.expires_days and config.expires_days > 0:
+        db_note.share_expires_at = datetime.utcnow() + timedelta(days=config.expires_days)
+    else:
+        db_note.share_expires_at = None
+
+    if not db_note.share_created_at:
+        db_note.share_created_at = func.now()
+
+    db.commit()
+    db.refresh(db_note)
+
+    return NoteShareResponse(
+        is_shared=db_note.is_shared,
+        share_token=db_note.share_token,
+        share_password="****" if db_note.share_password else None,
+        share_expires_at=db_note.share_expires_at,
+        share_created_at=db_note.share_created_at,
+        share_view_count=db_note.share_view_count or 0,
+        share_url=get_share_url(note_id, db_note.share_token)
+    )
+
+
+@app.delete("/api/notes/{note_id}/share")
+def disable_share(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    db_note.is_shared = 0
+    db_note.share_password = None
+    db_note.share_expires_at = None
+
+    db.commit()
+
+    return {"message": "分享已关闭"}
+
+
+@app.get("/api/notes/{note_id}/share", response_model=NoteShareResponse)
+def get_share_info(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    return NoteShareResponse(
+        is_shared=db_note.is_shared,
+        share_token=db_note.share_token,
+        share_password="****" if db_note.share_password else None,
+        share_expires_at=db_note.share_expires_at,
+        share_created_at=db_note.share_created_at,
+        share_view_count=db_note.share_view_count or 0,
+        share_url=get_share_url(note_id, db_note.share_token) if db_note.share_token else None
+    )
+
+
+@app.get("/api/notes/{note_id}/share/stats", response_model=ShareStatsResponse)
+def get_share_stats(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    recent_views = db.query(ShareViewModel).filter(
+        ShareViewModel.note_id == note_id
+    ).order_by(ShareViewModel.viewed_at.desc()).limit(20).all()
+
+    recent_views_list = [
+        {
+            "viewed_at": v.viewed_at,
+            "ip_address": v.ip_address,
+            "user_agent": v.user_agent[:100] if v.user_agent else None
+        }
+        for v in recent_views
+    ]
+
+    return ShareStatsResponse(
+        view_count=db_note.share_view_count or 0,
+        share_created_at=db_note.share_created_at,
+        share_expires_at=db_note.share_expires_at,
+        is_shared=db_note.is_shared,
+        recent_views=recent_views_list
+    )
+
+
+@app.get("/api/notes/{note_id}/share/qrcode")
+def get_share_qrcode(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    if db_note.is_shared != 1 or not db_note.share_token:
+        raise HTTPException(status_code=400, detail="该笔记尚未开启分享")
+
+    try:
+        import qrcode
+        share_url = get_share_url(note_id, db_note.share_token)
+
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(share_url)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png"
+        )
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务器未安装二维码生成库")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成二维码失败: {str(e)}")
+
+
+@app.get("/api/public/share/{token}")
+def get_public_note(
+    token: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    db_note = db.query(NoteModel).options(
+        joinedload(NoteModel.tags),
+        joinedload(NoteModel.owner)
+    ).filter(NoteModel.share_token == token).first()
+
+    if not db_note:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+
+    if db_note.is_shared != 1:
+        raise HTTPException(status_code=404, detail="该分享已关闭")
+
+    if is_share_expired(db_note):
+        raise HTTPException(status_code=410, detail="该分享链接已过期")
+
+    if db_note.share_password:
+        return {
+            "requires_password": True,
+            "message": "该分享需要访问密码"
+        }
+
+    record_share_view(db, db_note.id, request)
+
+    owner = db_note.owner
+    return PublicShareNoteResponse(
+        id=db_note.id,
+        title=db_note.title,
+        content=db_note.content,
+        content_plain=db_note.content_plain,
+        created_at=db_note.created_at,
+        updated_at=db_note.updated_at,
+        tags=db_note.tags,
+        owner_name=owner.full_name if owner else None,
+        owner_username=owner.username if owner else None
+    )
+
+
+@app.post("/api/public/share/{token}/access")
+def access_protected_note(
+    token: str,
+    req: SharePasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    db_note = db.query(NoteModel).options(
+        joinedload(NoteModel.tags),
+        joinedload(NoteModel.owner)
+    ).filter(NoteModel.share_token == token).first()
+
+    if not db_note:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+
+    if db_note.is_shared != 1:
+        raise HTTPException(status_code=404, detail="该分享已关闭")
+
+    if is_share_expired(db_note):
+        raise HTTPException(status_code=410, detail="该分享链接已过期")
+
+    if not db_note.share_password:
+        owner = db_note.owner
+        return PublicShareNoteResponse(
+            id=db_note.id,
+            title=db_note.title,
+            content=db_note.content,
+            content_plain=db_note.content_plain,
+            created_at=db_note.created_at,
+            updated_at=db_note.updated_at,
+            tags=db_note.tags,
+            owner_name=owner.full_name if owner else None,
+            owner_username=owner.username if owner else None
+        )
+
+    if not verify_password(req.password, db_note.share_password):
+        raise HTTPException(status_code=401, detail="访问密码错误")
+
+    record_share_view(db, db_note.id, request)
+
+    owner = db_note.owner
+    return PublicShareNoteResponse(
+        id=db_note.id,
+        title=db_note.title,
+        content=db_note.content,
+        content_plain=db_note.content_plain,
+        created_at=db_note.created_at,
+        updated_at=db_note.updated_at,
+        tags=db_note.tags,
+        owner_name=owner.full_name if owner else None,
+        owner_username=owner.username if owner else None
     )

@@ -57,8 +57,28 @@ class Note(Base):
     pin_priority = Column(Integer, default=0)
     pinned_at = Column(DateTime(timezone=True))
 
+    is_shared = Column(Integer, default=0)
+    share_token = Column(String(64), unique=True, index=True)
+    share_password = Column(String(255))
+    share_expires_at = Column(DateTime(timezone=True))
+    share_created_at = Column(DateTime(timezone=True))
+    share_view_count = Column(Integer, default=0)
+
     owner = relationship("User", back_populates="notes")
-    tags = relationship("Tag", secondary=note_tags, back_populates="notes")
+    tags = relationship("Tag", secondary=note_tags, back_populates="tags")
+    share_views = relationship("ShareView", back_populates="note", cascade="all, delete-orphan")
+
+
+class ShareView(Base):
+    __tablename__ = "share_views"
+
+    id = Column(Integer, primary_key=True, index=True)
+    note_id = Column(Integer, ForeignKey("notes.id"), nullable=False)
+    viewed_at = Column(DateTime(timezone=True), server_default=func.now())
+    ip_address = Column(String(50))
+    user_agent = Column(String(500))
+
+    note = relationship("Note", back_populates="share_views")
 
 
 class File(Base):

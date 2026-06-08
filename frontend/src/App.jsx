@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
 import TagManager from './components/TagManager.jsx'
+import ShareModal from './components/ShareModal.jsx'
 import { noteApi, tagApi, parseBlobError } from './services/api.js'
 import { useAuth } from './context/AuthContext.jsx'
 
@@ -25,6 +26,8 @@ function App() {
   const [selectedTagId, setSelectedTagId] = useState(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isTagManagerOpen, setIsTagManagerOpen] = useState(false)
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [sharingNote, setSharingNote] = useState(null)
   const [editingNote, setEditingNote] = useState(null)
   const [error, setError] = useState('')
   const [modalError, setModalError] = useState('')
@@ -433,6 +436,17 @@ function App() {
     }
   }
 
+  const handleShare = (note) => {
+    setSharingNote(note)
+    setIsShareModalOpen(true)
+  }
+
+  const handleCloseShareModal = () => {
+    setIsShareModalOpen(false)
+    setSharingNote(null)
+    refreshAllData()
+  }
+
   const getContrastColor = (hexColor) => {
     const r = parseInt(hexColor.slice(1, 3), 16)
     const g = parseInt(hexColor.slice(3, 5), 16)
@@ -810,6 +824,7 @@ function App() {
               onPinToggle={handlePinToggle}
               onExportSuccess={handleExportSuccess}
               onExportError={handleExportError}
+              onShare={handleShare}
               selectable={selectMode}
               selected={selectedNoteIds.includes(note.id)}
               onSelect={handleSelectNote}
@@ -832,6 +847,13 @@ function App() {
         isOpen={isTagManagerOpen}
         onClose={handleTagManagerClose}
         onTagsChange={handleTagsChange}
+      />
+
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={handleCloseShareModal}
+        noteId={sharingNote?.id}
+        noteTitle={sharingNote?.title}
       />
 
       {showBatchExportModal && (

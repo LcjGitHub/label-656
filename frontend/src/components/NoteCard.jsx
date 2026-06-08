@@ -36,6 +36,7 @@ const NoteCard = ({
   onPinToggle,
   onExportSuccess,
   onExportError,
+  onShare,
   selectable = false,
   selected = false,
   onSelect,
@@ -314,6 +315,13 @@ const NoteCard = ({
               </div>
             )}
           </div>
+          <button
+            className={`btn btn-share ${note.is_shared === 1 ? 'active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); onShare && onShare(note); }}
+            title={note.is_shared === 1 ? '管理分享' : '分享笔记'}
+          >
+            🔗 {note.is_shared === 1 ? '已分享' : '分享'}
+          </button>
           <div className="export-action-wrapper" ref={exportMenuRef}>
             <button
               className="btn btn-export"
@@ -436,6 +444,9 @@ const NoteCard = ({
         )}
         {isPinned && note.pinned_at && (
           <span>📌 置顶 (优先级 {note.pin_priority}): {formatDate(note.pinned_at)}</span>
+        )}
+        {note.is_shared === 1 && (
+          <span>🔗 已分享 {note.share_view_count ? `(${note.share_view_count} 次访问)` : ''}</span>
         )}
       </div>
     </div>
