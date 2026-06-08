@@ -4,6 +4,7 @@ import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
 import TagManager from './components/TagManager.jsx'
 import ShareModal from './components/ShareModal.jsx'
+import NotificationDropdown from './components/NotificationDropdown.jsx'
 import { noteApi, tagApi, parseBlobError } from './services/api.js'
 import { useAuth } from './context/AuthContext.jsx'
 
@@ -562,12 +563,43 @@ function App() {
   }
 
   const handleCommentsChange = async () => {
-    await refreshAllData()
+    await Promise.all([
+      fetchAllNotes(),
+      fetchNotes(searchKeyword, selectedTagId),
+      fetchTrashCount(),
+    ])
     if (viewingNote) {
-      const updatedNote = [...allNotes, ...trashNotes].find(n => n.id === viewingNote.id)
-      if (updatedNote) {
-        setViewingNote(updatedNote)
+      try {
+        const response = await noteApi.getNotes('', null, false, false)
+        const allList = response.data
+        const updatedNote = allList.find(n => n.id === viewingNote.id)
+        if (updatedNote) {
+          setViewingNote(updatedNote)
+        }
+      } catch (err) {
+        console.error('Error refreshing viewing note:', err)
       }
+    }
+  }
+
+  const handleNavigateToNoteByNotification = async (noteId) => {
+    try {
+      const response = await noteApi.getNotes('', null, false, false)
+      const allList = response.data
+      const targetNote = allList.find(n => n.id === noteId)
+      if (targetNote) {
+        setViewingNote(targetNote)
+        setIsViewModalOpen(true)
+        await refreshAllData()
+        setTimeout(() => {
+          const el = document.getElementById('comments-section')
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth' })
+          }
+        }, 200)
+      }
+    } catch (err) {
+      console.error('Error navigating to note:', err)
     }
   }
 
@@ -740,6 +772,7 @@ function App() {
             </Link>
           </nav>
           <div className="user-info">
+            <NotificationDropdown onNavigateToNote={handleNavigateToNoteByNotification} />
             <span className="user-greeting">
               👤 {user?.full_name || user?.username}
             </span>

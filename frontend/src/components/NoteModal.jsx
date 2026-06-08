@@ -30,7 +30,6 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange, viewO
   const [newTagColor, setNewTagColor] = useState(DEFAULT_COLORS[0])
   const [tagError, setTagError] = useState('')
   const [localError, setLocalError] = useState('')
-  const [activeTab, setActiveTab] = useState('content')
   const { user } = useAuth()
   const isEditing = !!note && !viewOnly
   const isViewing = viewOnly && !!note
@@ -67,7 +66,6 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange, viewO
     setIsCreatingTag(false)
     setNewTagName('')
     setTagError('')
-    setActiveTab('content')
   }, [note, isOpen, viewOnly])
 
   useEffect(() => {
@@ -188,25 +186,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange, viewO
         </div>
         {localError && <div className="error-message">{localError}</div>}
 
-        {isViewing && (
-          <div className="modal-tabs">
-            <button
-              className={`modal-tab ${activeTab === 'content' ? 'active' : ''}`}
-              onClick={() => setActiveTab('content')}
-            >
-              📝 笔记内容
-            </button>
-            <button
-              className={`modal-tab ${activeTab === 'comments' ? 'active' : ''}`}
-              onClick={() => setActiveTab('comments')}
-            >
-              💬 评论区 {note?.comment_count > 0 && `(${note.comment_count})`}
-            </button>
-          </div>
-        )}
-
-        {(!isViewing || activeTab === 'content') && (
-          <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit}>
             <div className="form-group">
               <label htmlFor="title">标题</label>
               {isViewing ? (
@@ -374,14 +354,15 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange, viewO
               </div>
             )}
           </form>
-        )}
 
-        {isViewing && activeTab === 'comments' && note && (
-          <CommentsSection
-            noteId={note.id}
-            noteOwnerId={note.user_id}
-            onCommentsChange={onCommentsChange}
-          />
+        {isViewing && note && (
+          <div id="comments-section">
+            <CommentsSection
+              noteId={note.id}
+              noteOwnerId={note.user_id}
+              onCommentsChange={onCommentsChange}
+            />
+          </div>
         )}
 
         {isViewing && (

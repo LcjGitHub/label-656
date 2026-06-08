@@ -2041,8 +2041,7 @@ def update_note_comment_stats(db: Session, note_id: int):
     if not db_note:
         return
     comment_count = db.query(CommentModel).filter(
-        CommentModel.note_id == note_id,
-        CommentModel.parent_id.is_(None)
+        CommentModel.note_id == note_id
     ).count()
     db_note.comment_count = comment_count
     last_comment = db.query(CommentModel).filter(
@@ -2056,6 +2055,13 @@ def update_note_comment_stats(db: Session, note_id: int):
         db_note.last_comment_at = None
         db_note.last_comment_preview = None
     db.commit()
+
+
+def delete_comment_tree(db: Session, comment: CommentModel):
+    replies = db.query(CommentModel).filter(CommentModel.parent_id == comment.id).all()
+    for reply in replies:
+        delete_comment_tree(db, reply)
+    db.delete(comment)
 
 
 def create_notification(db: Session, user_id: int, notif_type: str, content: str, related_id: int = None):
@@ -2123,7 +2129,9 @@ def get_note_comments(
         CommentModel.parent_id.is_(None)
     ).order_by(CommentModel.created_at.desc()).all()
 
-    total = len(comments)
+    total = db.query(CommentModel).filter(
+        CommentModel.note_id == note_id
+    ).count()
     response_comments = [build_comment_response(c, current_user.id) for c in comments]
     return CommentListResponse(total=total, comments=response_comments)
 
@@ -2239,7 +2247,7 @@ def delete_comment(
         raise HTTPException(status_code=403, detail="无权删除该评论")
 
     note_id = db_comment.note_id
-    db.delete(db_comment)
+    delete_comment_tree(db, db_comment)
     db.commit()
 
     update_note_comment_stats(db, note_id)
