@@ -33,6 +33,9 @@ from schemas import (
     NoteShareConfig, NoteShareResponse,
     PublicShareNoteResponse, SharePasswordRequest, ShareStatsResponse
 )
+
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
+
 from auth import (
     hash_password, verify_password, create_access_token,
     get_current_active_user, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -1501,7 +1504,7 @@ def generate_share_token() -> str:
 
 
 def get_share_url(note_id: int, token: str) -> str:
-    return f"/share/{token}"
+    return f"{FRONTEND_BASE_URL}/share/{token}"
 
 
 def is_share_expired(note) -> bool:
@@ -1553,8 +1556,6 @@ def enable_or_update_share(
         if len(config.password) < 4:
             raise HTTPException(status_code=400, detail="分享密码长度不能少于4位")
         db_note.share_password = hash_password(config.password)
-    else:
-        db_note.share_password = None
 
     if config.expires_days and config.expires_days > 0:
         db_note.share_expires_at = datetime.utcnow() + timedelta(days=config.expires_days)

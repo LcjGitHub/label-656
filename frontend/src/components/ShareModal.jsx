@@ -76,9 +76,14 @@ const ShareModal = ({ isOpen, onClose, noteId, noteTitle }) => {
     try {
       setLoading(true)
       setError('')
-      const pwd = password.trim() || null
+      const pwd = password.trim()
+      if (pwd && pwd.length < 4) {
+        setError('分享密码长度不能少于4位')
+        setLoading(false)
+        return
+      }
       const days = expiresDays ? parseInt(expiresDays) : null
-      const response = await noteApi.enableShare(noteId, pwd, days)
+      const response = await noteApi.enableShare(noteId, pwd || null, days)
       const data = response.data
       setShareEnabled(true)
       setShareUrl(data.share_url)
@@ -196,7 +201,7 @@ const ShareModal = ({ isOpen, onClose, noteId, noteTitle }) => {
               <div className="form-group">
                 <label>访问密码（可选）</label>
                 <input
-                  type="text"
+                  type="password"
                   className="form-input"
                   placeholder="留空则无需密码"
                   value={password}
@@ -321,7 +326,7 @@ const ShareModal = ({ isOpen, onClose, noteId, noteTitle }) => {
                 <div className="form-group">
                   <label>新访问密码（留空保持不变）</label>
                   <input
-                    type="text"
+                    type="password"
                     className="form-input"
                     placeholder={hasPassword ? '留空保持当前密码' : '设置访问密码'}
                     value={password}

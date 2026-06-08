@@ -65,7 +65,7 @@ class Note(Base):
     share_view_count = Column(Integer, default=0)
 
     owner = relationship("User", back_populates="notes")
-    tags = relationship("Tag", secondary=note_tags, back_populates="tags")
+    tags = relationship("Tag", secondary=note_tags, back_populates="notes")
     share_views = relationship("ShareView", back_populates="note", cascade="all, delete-orphan")
 
 
