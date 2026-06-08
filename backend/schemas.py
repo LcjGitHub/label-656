@@ -148,6 +148,7 @@ class Note(NoteBase):
     share_expires_at: Optional[datetime] = None
     share_created_at: Optional[datetime] = None
     share_view_count: int = 0
+    deleted_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -260,3 +261,15 @@ class NoteExportResponse(BaseModel):
     download_url: str
     note_count: int
     file_size: int
+
+
+class NoteBatchRestoreRequest(BaseModel):
+    note_ids: List[int]
+
+
+class NoteBatchPermanentDeleteRequest(BaseModel):
+    note_ids: List[int]
+
+
+class NoteTrashCountResponse(BaseModel):
+    count: int

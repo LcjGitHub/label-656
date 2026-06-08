@@ -2611,3 +2611,42 @@ body {
     font-size: 1.4rem;
   }
 }
+
+.date-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.date-filter label {
+  white-space: nowrap;
+  color: #7f8c8d;
+  font-weight: 500;
+}
+
+.date-filter input[type="date"] {
+  padding: 6px 10px;
+  border: 1.5px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #333;
+  background: white;
+  transition: border-color 0.3s;
+  cursor: pointer;
+}
+
+.date-filter input[type="date"]:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.date-filter input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.date-filter input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}

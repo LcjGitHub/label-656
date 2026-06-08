@@ -211,6 +211,34 @@ export const noteApi = {
       responseType: 'blob'
     })
   },
+
+  getTrashNotes: (search = '', deletedFrom = null, deletedTo = null) => {
+    const params = {}
+    if (search) params.search = search
+    if (deletedFrom) params.deleted_from = deletedFrom
+    if (deletedTo) params.deleted_to = deletedTo
+    return api.get('/notes/trash', { params })
+  },
+
+  getTrashCount: () => {
+    return api.get('/notes/trash/count')
+  },
+
+  restoreNote: (noteId) => {
+    return api.put(`/notes/${noteId}/restore`)
+  },
+
+  batchRestoreNotes: (noteIds) => {
+    return api.put('/notes/batch/restore', { note_ids: noteIds })
+  },
+
+  permanentDeleteNote: (noteId) => {
+    return api.delete(`/notes/${noteId}/permanent`)
+  },
+
+  batchPermanentDeleteNotes: (noteIds) => {
+    return api.post('/notes/batch/permanent-delete', { note_ids: noteIds })
+  },
 }
 
 export const publicApi = axios.create({

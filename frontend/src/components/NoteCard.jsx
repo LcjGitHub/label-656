@@ -30,6 +30,8 @@ const NoteCard = ({
   searchKeyword,
   onEdit,
   onDelete,
+  onRestore,
+  isTrash = false,
   onRemoveTag,
   onTagClick,
   onFavoriteToggle,
@@ -263,147 +265,168 @@ const NoteCard = ({
           }
         </h3>
         <div className="note-actions">
-          <button
-            className={`btn-icon ${isFavorited ? 'active' : ''}`}
-            onClick={handleFavoriteToggle}
-            title={isFavorited ? '取消收藏' : '收藏'}
-          >
-            {isFavorited ? '⭐' : '☆'}
-          </button>
-          <div className="pin-action-wrapper">
-            <button
-              className={`btn-icon ${isPinned ? 'active' : ''}`}
-              onClick={handlePinClick}
-              title={isPinned ? '取消置顶' : '置顶'}
-            >
-              {isPinned ? '📌' : '📍'}
-            </button>
-            {showPinPriority && (
-              <div className="pin-priority-popup" onClick={(e) => e.stopPropagation()}>
-                <div className="pin-priority-title">设置置顶优先级</div>
-                <div className="pin-priority-desc">数值越大越靠前</div>
-                <div className="pin-priority-input-wrapper">
-                  <input
-                    type="number"
-                    className="pin-priority-input"
-                    value={pinPriority}
-                    onChange={(e) => setPinPriority(Math.max(0, parseInt(e.target.value) || 0))}
-                    min="0"
-                    max="999"
-                    autoFocus
-                  />
-                </div>
-                <div className="pin-priority-presets">
-                  {[0, 1, 2, 3, 5, 10].map(p => (
-                    <button
-                      key={p}
-                      className={`pin-priority-preset ${pinPriority === p ? 'active' : ''}`}
-                      onClick={() => setPinPriority(p)}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <div className="pin-priority-actions">
-                  <button className="btn btn-secondary btn-tiny" onClick={handleCancelPin}>
-                    取消
-                  </button>
-                  <button className="btn btn-primary btn-tiny" onClick={handleConfirmPin}>
-                    确定
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            className={`btn btn-share ${note.is_shared === 1 ? 'active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); onShare && onShare(note); }}
-            title={note.is_shared === 1 ? '管理分享' : '分享笔记'}
-          >
-            🔗 {note.is_shared === 1 ? '已分享' : '分享'}
-          </button>
-          <div className="export-action-wrapper" ref={exportMenuRef}>
-            <button
-              className="btn btn-export"
-              onClick={handleExportClick}
-              title="导出笔记"
-              disabled={exporting}
-            >
-              {exporting ? '导出中...' : '📤 导出'}
-            </button>
-            {showExportMenu && (
-              <div className="export-menu-popup" onClick={(e) => e.stopPropagation()}>
-                <div className="export-menu-title">导出设置</div>
-
-                <div className="export-menu-section">
-                  <div className="export-menu-label">导出格式</div>
-                  <div className="export-format-options">
-                    <label className={`export-format-option ${exportFormat === 'md' ? 'active' : ''}`}>
+          {!isTrash ? (
+            <>
+              <button
+                className={`btn-icon ${isFavorited ? 'active' : ''}`}
+                onClick={handleFavoriteToggle}
+                title={isFavorited ? '取消收藏' : '收藏'}
+              >
+                {isFavorited ? '⭐' : '☆'}
+              </button>
+              <div className="pin-action-wrapper">
+                <button
+                  className={`btn-icon ${isPinned ? 'active' : ''}`}
+                  onClick={handlePinClick}
+                  title={isPinned ? '取消置顶' : '置顶'}
+                >
+                  {isPinned ? '📌' : '📍'}
+                </button>
+                {showPinPriority && (
+                  <div className="pin-priority-popup" onClick={(e) => e.stopPropagation()}>
+                    <div className="pin-priority-title">设置置顶优先级</div>
+                    <div className="pin-priority-desc">数值越大越靠前</div>
+                    <div className="pin-priority-input-wrapper">
                       <input
-                        type="radio"
-                        name="exportFormat"
-                        value="md"
-                        checked={exportFormat === 'md'}
-                        onChange={(e) => setExportFormat(e.target.value)}
+                        type="number"
+                        className="pin-priority-input"
+                        value={pinPriority}
+                        onChange={(e) => setPinPriority(Math.max(0, parseInt(e.target.value) || 0))}
+                        min="0"
+                        max="999"
+                        autoFocus
                       />
-                      <span>标记文本格式</span>
-                    </label>
-                    <label className={`export-format-option ${exportFormat === 'txt' ? 'active' : ''}`}>
-                      <input
-                        type="radio"
-                        name="exportFormat"
-                        value="txt"
-                        checked={exportFormat === 'txt'}
-                        onChange={(e) => setExportFormat(e.target.value)}
-                      />
-                      <span>纯文本格式</span>
-                    </label>
+                    </div>
+                    <div className="pin-priority-presets">
+                      {[0, 1, 2, 3, 5, 10].map(p => (
+                        <button
+                          key={p}
+                          className={`pin-priority-preset ${pinPriority === p ? 'active' : ''}`}
+                          onClick={() => setPinPriority(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pin-priority-actions">
+                      <button className="btn btn-secondary btn-tiny" onClick={handleCancelPin}>
+                        取消
+                      </button>
+                      <button className="btn btn-primary btn-tiny" onClick={handleConfirmPin}>
+                        确定
+                      </button>
+                    </div>
                   </div>
-                </div>
-
-                <div className="export-menu-section">
-                  <label className="export-checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={exportIncludeTags}
-                      onChange={(e) => setExportIncludeTags(e.target.checked)}
-                    />
-                    <span>包含标签</span>
-                  </label>
-                  <label className="export-checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={exportIncludeMetadata}
-                      onChange={(e) => setExportIncludeMetadata(e.target.checked)}
-                    />
-                    <span>包含元数据（创建时间、收藏状态等）</span>
-                  </label>
-                </div>
-
-                <div className="export-menu-actions">
-                  <button
-                    className="btn btn-secondary btn-tiny"
-                    onClick={(e) => { e.stopPropagation(); setShowExportMenu(false); }}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="btn btn-primary btn-tiny"
-                    onClick={(e) => { e.stopPropagation(); handleExport(); }}
-                    disabled={exporting}
-                  >
-                    {exporting ? '导出中...' : '确认导出'}
-                  </button>
-                </div>
+                )}
               </div>
-            )}
-          </div>
-          <button className="btn btn-edit" onClick={(e) => { e.stopPropagation(); onEdit(note); }}>
-            编辑
-          </button>
-          <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); onDelete(note.id); }}>
-            删除
-          </button>
+              <button
+                className={`btn btn-share ${note.is_shared === 1 ? 'active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onShare && onShare(note); }}
+                title={note.is_shared === 1 ? '管理分享' : '分享笔记'}
+              >
+                🔗 {note.is_shared === 1 ? '已分享' : '分享'}
+              </button>
+              <div className="export-action-wrapper" ref={exportMenuRef}>
+                <button
+                  className="btn btn-export"
+                  onClick={handleExportClick}
+                  title="导出笔记"
+                  disabled={exporting}
+                >
+                  {exporting ? '导出中...' : '📤 导出'}
+                </button>
+                {showExportMenu && (
+                  <div className="export-menu-popup" onClick={(e) => e.stopPropagation()}>
+                    <div className="export-menu-title">导出设置</div>
+
+                    <div className="export-menu-section">
+                      <div className="export-menu-label">导出格式</div>
+                      <div className="export-format-options">
+                        <label className={`export-format-option ${exportFormat === 'md' ? 'active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="exportFormat"
+                            value="md"
+                            checked={exportFormat === 'md'}
+                            onChange={(e) => setExportFormat(e.target.value)}
+                          />
+                          <span>标记文本格式</span>
+                        </label>
+                        <label className={`export-format-option ${exportFormat === 'txt' ? 'active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="exportFormat"
+                            value="txt"
+                            checked={exportFormat === 'txt'}
+                            onChange={(e) => setExportFormat(e.target.value)}
+                          />
+                          <span>纯文本格式</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="export-menu-section">
+                      <label className="export-checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={exportIncludeTags}
+                          onChange={(e) => setExportIncludeTags(e.target.checked)}
+                        />
+                        <span>包含标签</span>
+                      </label>
+                      <label className="export-checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={exportIncludeMetadata}
+                          onChange={(e) => setExportIncludeMetadata(e.target.checked)}
+                        />
+                        <span>包含元数据（创建时间、收藏状态等）</span>
+                      </label>
+                    </div>
+
+                    <div className="export-menu-actions">
+                      <button
+                        className="btn btn-secondary btn-tiny"
+                        onClick={(e) => { e.stopPropagation(); setShowExportMenu(false); }}
+                      >
+                        取消
+                      </button>
+                      <button
+                        className="btn btn-primary btn-tiny"
+                        onClick={(e) => { e.stopPropagation(); handleExport(); }}
+                        disabled={exporting}
+                      >
+                        {exporting ? '导出中...' : '确认导出'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button className="btn btn-edit" onClick={(e) => { e.stopPropagation(); onEdit(note); }}>
+                编辑
+              </button>
+              <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); onDelete(note.id); }}>
+                删除
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="btn btn-success"
+                onClick={(e) => { e.stopPropagation(); onRestore && onRestore(note.id); }}
+                title="恢复笔记到原位置"
+              >
+                ♻️ 恢复
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={(e) => { e.stopPropagation(); onDelete && onDelete(note.id); }}
+                title="永久删除，不可恢复"
+              >
+                🗑️ 永久删除
+              </button>
+            </>
+          )}
         </div>
       </div>
       {highlightHtml(note.content, searchKeyword)}
@@ -412,24 +435,26 @@ const NoteCard = ({
           {note.tags.map((tag) => (
             <span
               key={tag.id}
-              className="tag-badge removable clickable"
+              className={`tag-badge ${isTrash ? '' : 'removable clickable'}`}
               style={{
                 backgroundColor: tag.color,
                 color: getContrastColor(tag.color),
               }}
-              onClick={(e) => handleTagClick(tag, e)}
-              title={`点击筛选此标签的笔记`}
+              onClick={(e) => !isTrash && handleTagClick(tag, e)}
+              title={isTrash ? tag.name : `点击筛选此标签的笔记`}
             >
               {tag.name}
-              <button
-                type="button"
-                className="tag-remove-btn"
-                onClick={(e) => handleRemoveTag(tag.id, e)}
-                aria-label="移除标签"
-                title="从笔记中移除该标签"
-              >
-                &times;
-              </button>
+              {!isTrash && (
+                <button
+                  type="button"
+                  className="tag-remove-btn"
+                  onClick={(e) => handleRemoveTag(tag.id, e)}
+                  aria-label="移除标签"
+                  title="从笔记中移除该标签"
+                >
+                  &times;
+                </button>
+              )}
             </span>
           ))}
         </div>
@@ -439,14 +464,19 @@ const NoteCard = ({
         {note.updated_at && (
           <span>更新: {formatDate(note.updated_at)}</span>
         )}
-        {isFavorited && note.favorited_at && (
+        {!isTrash && isFavorited && note.favorited_at && (
           <span>⭐ 收藏: {formatDate(note.favorited_at)}</span>
         )}
-        {isPinned && note.pinned_at && (
+        {!isTrash && isPinned && note.pinned_at && (
           <span>📌 置顶 (优先级 {note.pin_priority}): {formatDate(note.pinned_at)}</span>
         )}
-        {note.is_shared === 1 && (
+        {!isTrash && note.is_shared === 1 && (
           <span>🔗 已分享 {note.share_view_count ? `(${note.share_view_count} 次访问)` : ''}</span>
+        )}
+        {isTrash && note.deleted_at && (
+          <span style={{ color: '#e74c3c', fontWeight: 'bold' }}>
+            🗑️ 删除于: {formatDate(note.deleted_at)}
+          </span>
         )}
       </div>
     </div>

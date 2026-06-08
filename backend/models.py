@@ -64,6 +64,8 @@ class Note(Base):
     share_created_at = Column(DateTime(timezone=True))
     share_view_count = Column(Integer, default=0)
 
+    deleted_at = Column(DateTime(timezone=True))
+
     owner = relationship("User", back_populates="notes")
     tags = relationship("Tag", secondary=note_tags, back_populates="notes")
     share_views = relationship("ShareView", back_populates="note", cascade="all, delete-orphan")

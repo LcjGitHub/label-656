@@ -21,6 +21,7 @@ const triggerDownload = (blob, filename) => {
 function App() {
   const [notes, setNotes] = useState([])
   const [allNotes, setAllNotes] = useState([])
+  const [trashNotes, setTrashNotes] = useState([])
   const [tags, setTags] = useState([])
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedTagId, setSelectedTagId] = useState(null)
@@ -34,6 +35,8 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [allNotesLoading, setAllNotesLoading] = useState(true)
   const [tagsLoading, setTagsLoading] = useState(true)
+  const [trashLoading, setTrashLoading] = useState(true)
+  const [trashCount, setTrashCount] = useState(0)
   const { user, logout } = useAuth()
   const location = useLocation()
 
@@ -42,6 +45,9 @@ function App() {
   const [selectMode, setSelectMode] = useState(false)
   const [showBatchPinPriority, setShowBatchPinPriority] = useState(false)
   const [batchPinPriority, setBatchPinPriority] = useState(0)
+
+  const [deletedFrom, setDeletedFrom] = useState('')
+  const [deletedTo, setDeletedTo] = useState('')
 
   const [successMessage, setSuccessMessage] = useState('')
   const [exportError, setExportError] = useState('')
@@ -65,24 +71,53 @@ function App() {
     }
   }
 
+  const fetchTrashCount = async () => {
+    try {
+      const response = await noteApi.getTrashCount()
+      setTrashCount(response.data.count)
+    } catch (err) {
+      console.error('Error fetching trash count:', err)
+    }
+  }
+
+  const fetchTrashNotes = async (search = '', from = '', to = '') => {
+    try {
+      setTrashLoading(true)
+      setError('')
+      const response = await noteApi.getTrashNotes(search, from || null, to || null)
+      setTrashNotes(response.data)
+    } catch (err) {
+      setError('加载回收站笔记失败，请稍后重试')
+      console.error('Error fetching trash notes:', err)
+    } finally {
+      setTrashLoading(false)
+    }
+  }
+
   const fetchNotes = async (search = '', tagId = null) => {
     try {
       setLoading(true)
       setError('')
       let response
-      if (viewMode === 'favorites') {
+      if (viewMode === 'trash') {
+        response = await noteApi.getTrashNotes(search, deletedFrom || null, deletedTo || null)
+        setTrashNotes(response.data)
+      } else if (viewMode === 'favorites') {
         response = await noteApi.getFavoriteNotes(search, tagId)
       } else if (viewMode === 'pinned') {
         response = await noteApi.getPinnedNotes(search, tagId)
       } else {
         response = await noteApi.getNotes(search, tagId, false, false)
       }
-      setNotes(response.data)
+      if (viewMode !== 'trash') {
+        setNotes(response.data)
+      }
     } catch (err) {
       setError('加载笔记失败，请稍后重试')
       console.error('Error fetching notes:', err)
     } finally {
       setLoading(false)
+      setTrashLoading(false)
     }
   }
 
@@ -103,16 +138,20 @@ function App() {
       fetchAllNotes(),
       fetchNotes(searchKeyword, selectedTagId),
       fetchTags(),
+      fetchTrashCount(),
+      fetchTrashNotes(searchKeyword, deletedFrom, deletedTo),
     ])
   }
 
   useEffect(() => {
     fetchNotes(searchKeyword, selectedTagId)
-  }, [searchKeyword, selectedTagId, viewMode])
+  }, [searchKeyword, selectedTagId, viewMode, deletedFrom, deletedTo])
 
   useEffect(() => {
     fetchAllNotes()
     fetchTags()
+    fetchTrashCount()
+    fetchTrashNotes()
   }, [])
 
   const handleSearch = (e) => {
@@ -142,7 +181,7 @@ function App() {
   }
 
   const handleDeleteNote = async (id) => {
-    if (!window.confirm('确定要删除这条笔记吗？')) return
+    if (!window.confirm('确定要删除这条笔记吗？删除后将移入回收站，可在30天内恢复。')) return
 
     try {
       setError('')
@@ -151,11 +190,104 @@ function App() {
       await Promise.all([
         fetchAllNotes(),
         fetchNotes(searchKeyword, selectedTagId),
+        fetchTrashCount(),
       ])
+      setSuccessMessage('笔记已移入回收站')
     } catch (err) {
       setError('删除笔记失败，请稍后重试')
       console.error('Error deleting note:', err)
     }
+  }
+
+  const handleRestoreNote = async (id) => {
+    if (!window.confirm('确定要恢复这条笔记吗？')) return
+
+    try {
+      setError('')
+      await noteApi.restoreNote(id)
+      setSelectedNoteIds(prev => prev.filter(noteId => noteId !== id))
+      await Promise.all([
+        fetchAllNotes(),
+        fetchNotes(searchKeyword, selectedTagId),
+        fetchTrashCount(),
+        fetchTrashNotes(searchKeyword, deletedFrom, deletedTo),
+      ])
+      setSuccessMessage('笔记已恢复到原位置')
+    } catch (err) {
+      setError('恢复笔记失败，请稍后重试')
+      console.error('Error restoring note:', err)
+    }
+  }
+
+  const handlePermanentDeleteNote = async (id) => {
+    if (!window.confirm('确定要永久删除这条笔记吗？此操作不可恢复！')) return
+
+    try {
+      setError('')
+      await noteApi.permanentDeleteNote(id)
+      setSelectedNoteIds(prev => prev.filter(noteId => noteId !== id))
+      await Promise.all([
+        fetchTrashCount(),
+        fetchTrashNotes(searchKeyword, deletedFrom, deletedTo),
+      ])
+      setSuccessMessage('笔记已永久删除')
+    } catch (err) {
+      setError('永久删除笔记失败，请稍后重试')
+      console.error('Error permanent deleting note:', err)
+    }
+  }
+
+  const handleBatchRestore = async () => {
+    if (selectedNoteIds.length === 0) {
+      alert('请先选择要恢复的笔记')
+      return
+    }
+    if (!window.confirm(`确定要恢复选中的 ${selectedNoteIds.length} 条笔记吗？`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.batchRestoreNotes(selectedNoteIds)
+      await Promise.all([
+        fetchAllNotes(),
+        fetchNotes(searchKeyword, selectedTagId),
+        fetchTrashCount(),
+        fetchTrashNotes(searchKeyword, deletedFrom, deletedTo),
+      ])
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(response.data.message)
+    } catch (err) {
+      setError('批量恢复失败，请稍后重试')
+      console.error('Error batch restore:', err)
+    }
+  }
+
+  const handleBatchPermanentDelete = async () => {
+    if (selectedNoteIds.length === 0) {
+      alert('请先选择要永久删除的笔记')
+      return
+    }
+    if (!window.confirm(`确定要永久删除选中的 ${selectedNoteIds.length} 条笔记吗？此操作不可恢复！`)) return
+
+    try {
+      setError('')
+      const response = await noteApi.batchPermanentDeleteNotes(selectedNoteIds)
+      await Promise.all([
+        fetchTrashCount(),
+        fetchTrashNotes(searchKeyword, deletedFrom, deletedTo),
+      ])
+      setSelectedNoteIds([])
+      setSelectMode(false)
+      alert(response.data.message)
+    } catch (err) {
+      setError('批量永久删除失败，请稍后重试')
+      console.error('Error batch permanent delete:', err)
+    }
+  }
+
+  const handleTrashDateFilterChange = () => {
+    setTrashNotes([])
+    setTrashLoading(true)
   }
 
   const handleRemoveTag = async (noteId, tagId) => {
@@ -621,9 +753,16 @@ function App() {
           📌 置顶笔记
           <span className="tab-count">{getPinnedCount()}</span>
         </button>
+        <button
+          className={`view-tab ${viewMode === 'trash' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('trash')}
+        >
+          🗑️ 回收站
+          <span className="tab-count">{trashCount}</span>
+        </button>
       </div>
 
-      {!tagsLoading && tags.length > 0 && (
+      {viewMode !== 'trash' && !tagsLoading && tags.length > 0 && (
         <div className="tag-filter-section">
           <div className="tag-filter-header">
             <span className="tag-filter-title">🏷️ 标签筛选：</span>
@@ -656,22 +795,54 @@ function App() {
         <input
           type="text"
           className="search-input"
-          placeholder="搜索笔记..."
+          placeholder={viewMode === 'trash' ? '搜索回收站笔记...' : '搜索笔记...'}
           value={searchKeyword}
           onChange={handleSearch}
         />
+        {viewMode === 'trash' && (
+          <>
+            <div className="date-filter">
+              <label>删除开始：</label>
+              <input
+                type="date"
+                value={deletedFrom}
+                onChange={(e) => { setDeletedFrom(e.target.value); handleTrashDateFilterChange() }}
+              />
+            </div>
+            <div className="date-filter">
+              <label>删除结束：</label>
+              <input
+                type="date"
+                value={deletedTo}
+                onChange={(e) => { setDeletedTo(e.target.value); handleTrashDateFilterChange() }}
+              />
+            </div>
+            {(deletedFrom || deletedTo) && (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => { setDeletedFrom(''); setDeletedTo(''); handleTrashDateFilterChange() }}
+              >
+                清除筛选
+              </button>
+            )}
+          </>
+        )}
         <button className="btn btn-secondary" onClick={toggleSelectMode}>
           {selectMode ? '❌ 取消选择' : '☑️ 批量操作'}
         </button>
-        <button className="btn btn-secondary" onClick={() => setIsTagManagerOpen(true)}>
-          🏷️ 管理标签
-        </button>
-        <button className="btn btn-success" onClick={handleOpenBatchExport}>
-          📤 导出笔记
-        </button>
-        <button className="btn btn-primary" onClick={handleCreateNote}>
-          + 新建笔记
-        </button>
+        {viewMode !== 'trash' && (
+          <>
+            <button className="btn btn-secondary" onClick={() => setIsTagManagerOpen(true)}>
+              🏷️ 管理标签
+            </button>
+            <button className="btn btn-success" onClick={handleOpenBatchExport}>
+              📤 导出笔记
+            </button>
+            <button className="btn btn-primary" onClick={handleCreateNote}>
+              + 新建笔记
+            </button>
+          </>
+        )}
       </div>
 
       {selectMode && (
@@ -679,7 +850,11 @@ function App() {
           <label className="select-all-label">
             <input
               type="checkbox"
-              checked={selectedNoteIds.length === notes.length && notes.length > 0}
+              checked={
+                viewMode === 'trash'
+                  ? selectedNoteIds.length === trashNotes.length && trashNotes.length > 0
+                  : selectedNoteIds.length === notes.length && notes.length > 0
+              }
               onChange={(e) => handleSelectAll(e.target.checked)}
             />
             全选
@@ -687,48 +862,69 @@ function App() {
           <span className="selected-count">
             已选择 {selectedNoteIds.length} 条笔记
           </span>
-          <button
-            className="btn btn-primary btn-small"
-            onClick={() => handleBatchFavorite(true)}
-            disabled={selectedNoteIds.length === 0}
-          >
-            ⭐ 批量收藏
-          </button>
-          <button
-            className="btn btn-secondary btn-small"
-            onClick={() => handleBatchFavorite(false)}
-            disabled={selectedNoteIds.length === 0}
-          >
-            ☆ 取消收藏
-          </button>
-          <button
-            className="btn btn-primary btn-small"
-            onClick={() => handleBatchPinClick(true)}
-            disabled={selectedNoteIds.length === 0}
-          >
-            📌 批量置顶
-          </button>
-          <button
-            className="btn btn-secondary btn-small"
-            onClick={() => handleBatchPinClick(false)}
-            disabled={selectedNoteIds.length === 0}
-          >
-            📍 取消置顶
-          </button>
-          <button
-            className="btn btn-warning btn-small"
-            onClick={handleUnpinAll}
-            disabled={getPinnedCount() === 0}
-          >
-            🔽 取消全部置顶
-          </button>
-          <button
-            className="btn btn-danger btn-small"
-            onClick={handleBatchUnfavorite}
-            disabled={selectedNoteIds.length === 0}
-          >
-            💔 批量取消收藏
-          </button>
+          {viewMode === 'trash' ? (
+            <>
+              <button
+                className="btn btn-success btn-small"
+                onClick={handleBatchRestore}
+                disabled={selectedNoteIds.length === 0}
+              >
+                ♻️ 批量恢复
+              </button>
+              <button
+                className="btn btn-danger btn-small"
+                onClick={handleBatchPermanentDelete}
+                disabled={selectedNoteIds.length === 0}
+              >
+                🗑️ 批量永久删除
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="btn btn-primary btn-small"
+                onClick={() => handleBatchFavorite(true)}
+                disabled={selectedNoteIds.length === 0}
+              >
+                ⭐ 批量收藏
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => handleBatchFavorite(false)}
+                disabled={selectedNoteIds.length === 0}
+              >
+                ☆ 取消收藏
+              </button>
+              <button
+                className="btn btn-primary btn-small"
+                onClick={() => handleBatchPinClick(true)}
+                disabled={selectedNoteIds.length === 0}
+              >
+                📌 批量置顶
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => handleBatchPinClick(false)}
+                disabled={selectedNoteIds.length === 0}
+              >
+                📍 取消置顶
+              </button>
+              <button
+                className="btn btn-warning btn-small"
+                onClick={handleUnpinAll}
+                disabled={getPinnedCount() === 0}
+              >
+                🔽 取消全部置顶
+              </button>
+              <button
+                className="btn btn-danger btn-small"
+                onClick={handleBatchUnfavorite}
+                disabled={selectedNoteIds.length === 0}
+              >
+                💔 批量取消收藏
+              </button>
+            </>
+          )}
 
           {showBatchPinPriority && (
             <div className="modal-overlay" onClick={() => setShowBatchPinPriority(false)}>
@@ -784,40 +980,48 @@ function App() {
         </div>
       )}
 
-      {loading ? (
+      {(viewMode === 'trash' ? trashLoading : loading) ? (
         <div className="empty-state">
           <p>加载中...</p>
         </div>
-      ) : notes.length === 0 ? (
+      ) : (viewMode === 'trash' ? trashNotes : notes).length === 0 ? (
         <div className="empty-state">
           <h3>
-            {searchKeyword || selectedTagId
-              ? '没有找到匹配的笔记'
-              : viewMode === 'favorites'
-                ? '还没有收藏的笔记'
-                : viewMode === 'pinned'
-                  ? '还没有置顶的笔记'
-                  : '还没有笔记'}
+            {viewMode === 'trash'
+              ? (searchKeyword || deletedFrom || deletedTo ? '没有找到匹配的回收站笔记' : '回收站是空的')
+              : searchKeyword || selectedTagId
+                ? '没有找到匹配的笔记'
+                : viewMode === 'favorites'
+                  ? '还没有收藏的笔记'
+                  : viewMode === 'pinned'
+                    ? '还没有置顶的笔记'
+                    : '还没有笔记'}
           </h3>
           <p>
-            {searchKeyword || selectedTagId
-              ? '试试其他关键词，或者创建一条新笔记'
-              : viewMode === 'favorites'
-                ? '点击笔记卡片上的 ⭐ 按钮收藏笔记'
-                : viewMode === 'pinned'
-                  ? '点击笔记卡片上的 📍 按钮置顶笔记'
-                  : '点击上方按钮创建你的第一条笔记'}
+            {viewMode === 'trash'
+              ? (searchKeyword || deletedFrom || deletedTo
+                  ? '试试其他搜索条件或日期筛选'
+                  : '删除的笔记会在这里保留 30 天，之后将被永久删除')
+              : searchKeyword || selectedTagId
+                ? '试试其他关键词，或者创建一条新笔记'
+                : viewMode === 'favorites'
+                  ? '点击笔记卡片上的 ⭐ 按钮收藏笔记'
+                  : viewMode === 'pinned'
+                    ? '点击笔记卡片上的 📍 按钮置顶笔记'
+                    : '点击上方按钮创建你的第一条笔记'}
           </p>
         </div>
       ) : (
         <div className="notes-list">
-          {notes.map(note => (
+          {(viewMode === 'trash' ? trashNotes : notes).map(note => (
             <NoteCard
               key={note.id}
               note={note}
               searchKeyword={searchKeyword}
               onEdit={handleEditNote}
-              onDelete={handleDeleteNote}
+              onDelete={viewMode === 'trash' ? handlePermanentDeleteNote : handleDeleteNote}
+              onRestore={viewMode === 'trash' ? handleRestoreNote : undefined}
+              isTrash={viewMode === 'trash'}
               onRemoveTag={handleRemoveTag}
               onTagClick={handleTagClick}
               onFavoriteToggle={handleFavoriteToggle}
