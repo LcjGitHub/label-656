@@ -3,16 +3,32 @@ import axios from 'axios'
 const API_BASE_URL = '/api'
 
 export const parseBlobError = async (error) => {
-  if (error?.response?.data instanceof Blob && error.response.data.type === 'application/json') {
-    try {
-      const text = await error.response.data.text()
-      const data = JSON.parse(text)
-      return data?.detail || '导出失败，请稍后重试'
-    } catch {
-      return '导出失败，请稍后重试'
+  try {
+    const respData = error?.response?.data
+    if (respData instanceof Blob) {
+      try {
+        const text = await respData.text()
+        if (text) {
+          try {
+            const data = JSON.parse(text)
+            if (data?.detail) return data.detail
+            if (data?.message) return data.message
+            if (typeof data === 'string') return data
+          } catch {
+            return text || '导出失败，请稍后重试'
+          }
+        }
+      } catch {
+        return '导出失败，请稍后重试'
+      }
     }
+    if (respData?.detail) return respData.detail
+    if (respData?.message) return respData.message
+    if (error?.message) return error.message
+  } catch {
+    return '导出失败，请稍后重试'
   }
-  return error?.response?.data?.detail || error?.message || '导出失败，请稍后重试'
+  return '导出失败，请稍后重试'
 }
 
 const api = axios.create({

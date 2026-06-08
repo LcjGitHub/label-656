@@ -297,7 +297,7 @@ const NoteCard = ({
                         checked={exportFormat === 'md'}
                         onChange={(e) => setExportFormat(e.target.value)}
                       />
-                      <span>Markdown 格式</span>
+                      <span>标记文本格式</span>
                     </label>
                     <label className={`export-format-option ${exportFormat === 'txt' ? 'active' : ''}`}>
                       <input

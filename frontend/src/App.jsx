@@ -539,8 +539,6 @@ function App() {
 
       setSuccessMessage(`成功导出 ${response.data.note_count} 条笔记`)
       setShowBatchExportModal(false)
-      setSelectedNoteIds([])
-      setSelectMode(false)
     } catch (err) {
       console.error('Error batch exporting notes:', err)
       const msg = await parseBlobError(err)
@@ -585,7 +583,7 @@ function App() {
 
       {error && <div className="error-message">{error}</div>}
       {successMessage && <div className="success-message">{successMessage}</div>}
-      {exportError && <div className="export-error-message">{exportError}</div>}
+      {exportError && !showBatchExportModal && <div className="export-error-message">{exportError}</div>}
 
       <div className="view-tabs">
         <button
@@ -888,7 +886,7 @@ function App() {
                       checked={batchExportFormat === 'md'}
                       onChange={(e) => setBatchExportFormat(e.target.value)}
                     />
-                    <span>Markdown 格式</span>
+                    <span>标记文本格式</span>
                   </label>
                   <label className={`export-format-option ${batchExportFormat === 'txt' ? 'active' : ''}`}>
                     <input

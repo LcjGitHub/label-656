@@ -1989,17 +1989,31 @@ body {
   border: 1px solid #e74c3c;
 }
 
+.export-progress {
+  margin-top: 15px;
+  padding: 16px 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  text-align: center;
+}
+
 .loading-spinner {
-  display: inline-block;
+  display: block;
   width: 28px;
   height: 28px;
   border: 3px solid #e0e0e0;
   border-top-color: #8e44ad;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-  margin: 0 auto 10px;
+  margin: 0 auto 12px;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.export-progress-text {
+  font-size: 0.9rem;
+  color: #7f8c8d;
+  margin: 0;
 }

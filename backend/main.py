@@ -1015,14 +1015,36 @@ EXPORT_DIR.mkdir(exist_ok=True)
 EXPORT_FILE_TTL_SECONDS = 3600
 
 
-def get_user_export_dir(user_id: int) -> Path:
-    user_dir = EXPORT_DIR / f"user_{user_id}"
-    user_dir.mkdir(parents=True, exist_ok=True)
+def get_user_export_dir(user_id: int, create: bool = True) -> Path:
+    user_dir = (EXPORT_DIR / f"user_{user_id}").resolve()
+    if create:
+        user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir
 
 
+def migrate_legacy_exports(user_id: int):
+    try:
+        user_dir = get_user_export_dir(user_id, create=True)
+        legacy_files = list(EXPORT_DIR.glob("*.md")) + list(EXPORT_DIR.glob("*.txt"))
+        for f in legacy_files:
+            if f.is_file():
+                try:
+                    target = user_dir / f.name
+                    if not target.exists():
+                        shutil.move(str(f), str(target))
+                    else:
+                        f.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def cleanup_expired_exports(user_id: int):
-    user_dir = get_user_export_dir(user_id)
+    migrate_legacy_exports(user_id)
+    user_dir = get_user_export_dir(user_id, create=False)
+    if not user_dir.exists():
+        return
     now = time.time()
     try:
         files = list(user_dir.glob("*"))
@@ -1333,17 +1355,17 @@ def download_export_file(
 
     cleanup_expired_exports(current_user.id)
 
-    user_dir = get_user_export_dir(current_user.id)
+    user_dir = get_user_export_dir(current_user.id).resolve()
     safe_filename = os.path.basename(filename)
-    file_path = user_dir / safe_filename
+    file_path = (user_dir / safe_filename).resolve()
+
+    try:
+        file_path.relative_to(user_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法的文件名")
 
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
-
-    try:
-        file_path.relative_to(user_dir.resolve())
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法的文件名")
 
     if safe_filename.endswith(".md"):
         media_type = "text/markdown"
