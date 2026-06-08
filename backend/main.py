@@ -20,7 +20,12 @@ import bleach
 from html import unescape
 
 from database import engine, Base, get_db
-from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel, ShareView as ShareViewModel
+from models import (
+    Note as NoteModel, User as UserModel, File as FileModel,
+    Tag as TagModel, ShareView as ShareViewModel,
+    Comment as CommentModel, CommentLike as CommentLikeModel,
+    Notification as NotificationModel
+)
 from schemas import (
     Note, NoteCreate, NoteUpdate, NoteTagRequest,
     NoteBatchFavoriteRequest, NoteBatchPinRequest,
@@ -33,7 +38,10 @@ from schemas import (
     Tag, TagCreate, TagUpdate,
     NoteExportRequest, NoteExportResponse,
     NoteShareConfig, NoteShareResponse,
-    PublicShareNoteResponse, SharePasswordRequest, ShareStatsResponse
+    PublicShareNoteResponse, SharePasswordRequest, ShareStatsResponse,
+    CommentCreate, CommentUpdate, Comment as CommentSchema,
+    CommentListResponse, CommentLikeResponse,
+    NotificationResponse, NotificationListResponse
 )
 
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
@@ -104,6 +112,33 @@ def run_database_migration():
             conn.execute(text("ALTER TABLE notes ADD COLUMN deleted_at DATETIME"))
             conn.commit()
             print("Migration: deleted_at 字段已添加")
+
+        if "comment_count" not in columns:
+            conn.execute(text("ALTER TABLE notes ADD COLUMN comment_count INTEGER DEFAULT 0"))
+            conn.commit()
+            print("Migration: comment_count 字段已添加")
+
+        if "last_comment_at" not in columns:
+            conn.execute(text("ALTER TABLE notes ADD COLUMN last_comment_at DATETIME"))
+            conn.commit()
+            print("Migration: last_comment_at 字段已添加")
+
+        if "last_comment_preview" not in columns:
+            conn.execute(text("ALTER TABLE notes ADD COLUMN last_comment_preview TEXT"))
+            conn.commit()
+            print("Migration: last_comment_preview 字段已添加")
+
+        if not inspector.has_table("comments"):
+            Base.metadata.create_all(bind=engine)
+            print("Migration: comments 表已创建")
+
+        if not inspector.has_table("comment_likes"):
+            Base.metadata.create_all(bind=engine)
+            print("Migration: comment_likes 表已创建")
+
+        if not inspector.has_table("notifications"):
+            Base.metadata.create_all(bind=engine)
+            print("Migration: notifications 表已创建")
 
     except Exception as e:
         print(f"Database migration error: {e}")
@@ -1998,3 +2033,303 @@ def access_protected_note(
         owner_name=owner.full_name if owner else None,
         owner_username=owner.username if owner else None
     )
+
+
+def update_note_comment_stats(db: Session, note_id: int):
+    from sqlalchemy import func
+    db_note = db.query(NoteModel).filter(NoteModel.id == note_id).first()
+    if not db_note:
+        return
+    comment_count = db.query(CommentModel).filter(
+        CommentModel.note_id == note_id,
+        CommentModel.parent_id.is_(None)
+    ).count()
+    db_note.comment_count = comment_count
+    last_comment = db.query(CommentModel).filter(
+        CommentModel.note_id == note_id
+    ).order_by(CommentModel.created_at.desc()).first()
+    if last_comment:
+        db_note.last_comment_at = last_comment.created_at
+        preview = last_comment.content[:200]
+        db_note.last_comment_preview = preview
+    else:
+        db_note.last_comment_at = None
+        db_note.last_comment_preview = None
+    db.commit()
+
+
+def create_notification(db: Session, user_id: int, notif_type: str, content: str, related_id: int = None):
+    if user_id and len(content) <= 500:
+        db_notif = NotificationModel(
+            user_id=user_id,
+            type=notif_type,
+            content=content,
+            related_id=related_id
+        )
+        db.add(db_notif)
+        db.commit()
+
+
+def build_comment_response(db_comment: CommentModel, current_user_id: int):
+    like_count = len(db_comment.likes)
+    is_liked_by_me = any(like.user_id == current_user_id for like in db_comment.likes)
+    user = db_comment.user
+    user_info = {
+        "id": user.id,
+        "username": user.username,
+        "full_name": user.full_name
+    } if user else None
+    replies = []
+    if db_comment.replies:
+        for reply in sorted(db_comment.replies, key=lambda r: r.created_at):
+            replies.append(build_comment_response(reply, current_user_id))
+    return {
+        "id": db_comment.id,
+        "note_id": db_comment.note_id,
+        "user_id": db_comment.user_id,
+        "parent_id": db_comment.parent_id,
+        "content": db_comment.content,
+        "created_at": db_comment.created_at,
+        "updated_at": db_comment.updated_at,
+        "user": user_info,
+        "like_count": like_count,
+        "is_liked_by_me": is_liked_by_me,
+        "replies": replies if replies else None
+    }
+
+
+@app.get("/api/notes/{note_id}/comments", response_model=CommentListResponse)
+def get_note_comments(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.deleted_at.is_(None)
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    if db_note.user_id != current_user.id and db_note.is_shared != 1:
+        raise HTTPException(status_code=403, detail="无权访问该笔记的评论")
+
+    comments = db.query(CommentModel).options(
+        joinedload(CommentModel.user),
+        joinedload(CommentModel.likes),
+        joinedload(CommentModel.replies).joinedload(CommentModel.user),
+        joinedload(CommentModel.replies).joinedload(CommentModel.likes)
+    ).filter(
+        CommentModel.note_id == note_id,
+        CommentModel.parent_id.is_(None)
+    ).order_by(CommentModel.created_at.desc()).all()
+
+    total = len(comments)
+    response_comments = [build_comment_response(c, current_user.id) for c in comments]
+    return CommentListResponse(total=total, comments=response_comments)
+
+
+@app.post("/api/notes/{note_id}/comments", response_model=CommentSchema, status_code=status.HTTP_201_CREATED)
+def create_comment(
+    note_id: int,
+    comment_data: CommentCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.deleted_at.is_(None)
+    ).first()
+    if not db_note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    if db_note.user_id != current_user.id and db_note.is_shared != 1:
+        raise HTTPException(status_code=403, detail="无权评论该笔记")
+
+    content = comment_data.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="评论内容不能为空")
+    if len(content) > 1000:
+        raise HTTPException(status_code=400, detail="评论内容不能超过1000个字符")
+
+    parent_comment = None
+    if comment_data.parent_id:
+        parent_comment = db.query(CommentModel).filter(
+            CommentModel.id == comment_data.parent_id,
+            CommentModel.note_id == note_id
+        ).first()
+        if not parent_comment:
+            raise HTTPException(status_code=404, detail="回复的评论不存在")
+
+    db_comment = CommentModel(
+        note_id=note_id,
+        user_id=current_user.id,
+        parent_id=comment_data.parent_id,
+        content=content
+    )
+    db.add(db_comment)
+    db.commit()
+    db.refresh(db_comment)
+
+    update_note_comment_stats(db, note_id)
+
+    commenter_name = current_user.full_name or current_user.username
+    if db_note.user_id != current_user.id:
+        notif_content = f"{commenter_name} 评论了你的笔记「{db_note.title[:30]}」：{content[:50]}"
+        create_notification(db, db_note.user_id, "comment", notif_content, note_id)
+    if parent_comment and parent_comment.user_id != current_user.id and parent_comment.user_id != db_note.user_id:
+        notif_content = f"{commenter_name} 回复了你的评论：{content[:50]}"
+        create_notification(db, parent_comment.user_id, "reply", notif_content, note_id)
+
+    db_comment = db.query(CommentModel).options(
+        joinedload(CommentModel.user),
+        joinedload(CommentModel.likes),
+        joinedload(CommentModel.replies).joinedload(CommentModel.user),
+        joinedload(CommentModel.replies).joinedload(CommentModel.likes)
+    ).filter(CommentModel.id == db_comment.id).first()
+
+    return build_comment_response(db_comment, current_user.id)
+
+
+@app.put("/api/comments/{comment_id}", response_model=CommentSchema)
+def update_comment(
+    comment_id: int,
+    comment_data: CommentUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_comment = db.query(CommentModel).options(
+        joinedload(CommentModel.user),
+        joinedload(CommentModel.likes),
+        joinedload(CommentModel.replies).joinedload(CommentModel.user),
+        joinedload(CommentModel.replies).joinedload(CommentModel.likes)
+    ).filter(CommentModel.id == comment_id).first()
+    if not db_comment:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    if db_comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="只能编辑自己的评论")
+
+    content = comment_data.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="评论内容不能为空")
+    if len(content) > 1000:
+        raise HTTPException(status_code=400, detail="评论内容不能超过1000个字符")
+
+    db_comment.content = content
+    db.commit()
+    db.refresh(db_comment)
+
+    update_note_comment_stats(db, db_comment.note_id)
+
+    return build_comment_response(db_comment, current_user.id)
+
+
+@app.delete("/api/comments/{comment_id}")
+def delete_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_comment = db.query(CommentModel).filter(CommentModel.id == comment_id).first()
+    if not db_comment:
+        raise HTTPException(status_code=404, detail="评论不存在")
+
+    db_note = db.query(NoteModel).filter(NoteModel.id == db_comment.note_id).first()
+    is_note_owner = db_note and db_note.user_id == current_user.id
+
+    if db_comment.user_id != current_user.id and not is_note_owner:
+        raise HTTPException(status_code=403, detail="无权删除该评论")
+
+    note_id = db_comment.note_id
+    db.delete(db_comment)
+    db.commit()
+
+    update_note_comment_stats(db, note_id)
+
+    return {"message": "评论删除成功"}
+
+
+@app.post("/api/comments/{comment_id}/like", response_model=CommentLikeResponse)
+def toggle_comment_like(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_comment = db.query(CommentModel).options(
+        joinedload(CommentModel.likes)
+    ).filter(CommentModel.id == comment_id).first()
+    if not db_comment:
+        raise HTTPException(status_code=404, detail="评论不存在")
+
+    existing_like = db.query(CommentLikeModel).filter(
+        CommentLikeModel.comment_id == comment_id,
+        CommentLikeModel.user_id == current_user.id
+    ).first()
+
+    if existing_like:
+        db.delete(existing_like)
+        db.commit()
+        liked = False
+    else:
+        db_like = CommentLikeModel(
+            comment_id=comment_id,
+            user_id=current_user.id
+        )
+        db.add(db_like)
+        db.commit()
+        liked = True
+
+    db.refresh(db_comment)
+    like_count = len(db_comment.likes)
+
+    return CommentLikeResponse(liked=liked, like_count=like_count)
+
+
+@app.get("/api/notifications", response_model=NotificationListResponse)
+def get_notifications(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    notifications = db.query(NotificationModel).filter(
+        NotificationModel.user_id == current_user.id
+    ).order_by(NotificationModel.created_at.desc()).limit(100).all()
+
+    total = len(notifications)
+    unread_count = sum(1 for n in notifications if n.is_read == 0)
+
+    return NotificationListResponse(
+        total=total,
+        unread_count=unread_count,
+        notifications=notifications
+    )
+
+
+@app.put("/api/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_notif = db.query(NotificationModel).filter(
+        NotificationModel.id == notification_id,
+        NotificationModel.user_id == current_user.id
+    ).first()
+    if not db_notif:
+        raise HTTPException(status_code=404, detail="通知不存在")
+
+    db_notif.is_read = 1
+    db.commit()
+
+    return {"message": "已标记为已读"}
+
+
+@app.put("/api/notifications/read-all")
+def mark_all_notifications_read(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db.query(NotificationModel).filter(
+        NotificationModel.user_id == current_user.id,
+        NotificationModel.is_read == 0
+    ).update({NotificationModel.is_read: 1})
+    db.commit()
+
+    return {"message": "已全部标记为已读"}

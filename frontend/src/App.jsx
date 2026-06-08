@@ -26,10 +26,12 @@ function App() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedTagId, setSelectedTagId] = useState(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false)
   const [isTagManagerOpen, setIsTagManagerOpen] = useState(false)
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
   const [sharingNote, setSharingNote] = useState(null)
   const [editingNote, setEditingNote] = useState(null)
+  const [viewingNote, setViewingNote] = useState(null)
   const [error, setError] = useState('')
   const [modalError, setModalError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -548,6 +550,27 @@ function App() {
     setModalError('')
   }
 
+  const handleViewNote = (note) => {
+    setViewingNote(note)
+    setIsViewModalOpen(true)
+  }
+
+  const handleCloseViewModal = () => {
+    setIsViewModalOpen(false)
+    setViewingNote(null)
+    refreshAllData()
+  }
+
+  const handleCommentsChange = async () => {
+    await refreshAllData()
+    if (viewingNote) {
+      const updatedNote = [...allNotes, ...trashNotes].find(n => n.id === viewingNote.id)
+      if (updatedNote) {
+        setViewingNote(updatedNote)
+      }
+    }
+  }
+
   const handleTagsChange = (newTags) => {
     setTags(newTags)
   }
@@ -1033,6 +1056,7 @@ function App() {
               selected={selectedNoteIds.includes(note.id)}
               onSelect={handleSelectNote}
               viewMode={viewMode}
+              onView={handleViewNote}
             />
           ))}
         </div>
@@ -1045,6 +1069,17 @@ function App() {
         note={editingNote}
         error={modalError}
         onTagsChange={handleNoteModalTagsChange}
+      />
+
+      <NoteModal
+        isOpen={isViewModalOpen}
+        onClose={handleCloseViewModal}
+        onSubmit={() => {}}
+        note={viewingNote}
+        error=""
+        onTagsChange={() => {}}
+        viewOnly={true}
+        onCommentsChange={handleCommentsChange}
       />
 
       <TagManager

@@ -149,6 +149,9 @@ class Note(NoteBase):
     share_created_at: Optional[datetime] = None
     share_view_count: int = 0
     deleted_at: Optional[datetime] = None
+    comment_count: int = 0
+    last_comment_at: Optional[datetime] = None
+    last_comment_preview: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -273,3 +276,75 @@ class NoteBatchPermanentDeleteRequest(BaseModel):
 
 class NoteTrashCountResponse(BaseModel):
     count: int
+
+
+class CommentUserInfo(BaseModel):
+    id: int
+    username: str
+    full_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CommentBase(BaseModel):
+    content: str
+
+
+class CommentCreate(CommentBase):
+    parent_id: Optional[int] = None
+
+
+class CommentUpdate(BaseModel):
+    content: str
+
+
+class Comment(CommentBase):
+    id: int
+    note_id: int
+    user_id: int
+    parent_id: Optional[int] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    user: Optional[CommentUserInfo] = None
+    like_count: int = 0
+    is_liked_by_me: bool = False
+    replies: Optional[List["Comment"]] = None
+
+    class Config:
+        from_attributes = True
+
+
+Comment.model_rebuild()
+
+
+class CommentListResponse(BaseModel):
+    total: int
+    comments: List[Comment]
+
+
+class CommentLikeResponse(BaseModel):
+    liked: bool
+    like_count: int
+
+
+class NotificationBase(BaseModel):
+    pass
+
+
+class NotificationResponse(BaseModel):
+    id: int
+    type: str
+    content: str
+    related_id: Optional[int] = None
+    is_read: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationListResponse(BaseModel):
+    total: int
+    unread_count: int
+    notifications: List[NotificationResponse]

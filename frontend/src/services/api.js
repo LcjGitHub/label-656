@@ -332,4 +332,43 @@ export const fileApi = {
   },
 }
 
+export const commentApi = {
+  getComments: (noteId) => {
+    return api.get(`/notes/${noteId}/comments`)
+  },
+
+  createComment: (noteId, content, parentId = null) => {
+    return api.post(`/notes/${noteId}/comments`, {
+      content,
+      parent_id: parentId
+    })
+  },
+
+  updateComment: (commentId, content) => {
+    return api.put(`/comments/${commentId}`, { content })
+  },
+
+  deleteComment: (commentId) => {
+    return api.delete(`/comments/${commentId}`)
+  },
+
+  toggleLike: (commentId) => {
+    return api.post(`/comments/${commentId}/like`)
+  },
+}
+
+export const notificationApi = {
+  getNotifications: () => {
+    return api.get('/notifications')
+  },
+
+  markAsRead: (notificationId) => {
+    return api.put(`/notifications/${notificationId}/read`)
+  },
+
+  markAllAsRead: () => {
+    return api.put('/notifications/read-all')
+  },
+}
+
 export default api

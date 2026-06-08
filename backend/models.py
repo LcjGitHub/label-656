@@ -65,10 +65,14 @@ class Note(Base):
     share_view_count = Column(Integer, default=0)
 
     deleted_at = Column(DateTime(timezone=True))
+    comment_count = Column(Integer, default=0)
+    last_comment_at = Column(DateTime(timezone=True))
+    last_comment_preview = Column(String(200))
 
     owner = relationship("User", back_populates="notes")
     tags = relationship("Tag", secondary=note_tags, back_populates="notes")
     share_views = relationship("ShareView", back_populates="note", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="note", cascade="all, delete-orphan")
 
 
 class ShareView(Base):
@@ -97,3 +101,46 @@ class File(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
 
     owner = relationship("User", back_populates="files")
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    note_id = Column(Integer, ForeignKey("notes.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("comments.id"), nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    note = relationship("Note", back_populates="comments")
+    user = relationship("User")
+    parent = relationship("Comment", remote_side=[id], backref="replies")
+    likes = relationship("CommentLike", back_populates="comment", cascade="all, delete-orphan")
+
+
+class CommentLike(Base):
+    __tablename__ = "comment_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    comment_id = Column(Integer, ForeignKey("comments.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    comment = relationship("Comment", back_populates="likes")
+    user = relationship("User")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    type = Column(String(50), nullable=False)
+    content = Column(String(500), nullable=False)
+    related_id = Column(Integer, nullable=True)
+    is_read = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")

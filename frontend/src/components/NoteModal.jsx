@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { tagApi } from '../services/api.js'
 import RichTextEditor from './RichTextEditor.jsx'
 import { htmlToPlainText } from '../utils/htmlUtils.js'
+import CommentsSection from './CommentsSection.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 
 const DEFAULT_COLORS = [
   '#3498db',
@@ -18,7 +20,7 @@ const DEFAULT_COLORS = [
   '#27ae60',
 ]
 
-const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => {
+const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange, viewOnly = false, onCommentsChange }) => {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [selectedTagIds, setSelectedTagIds] = useState([])
@@ -28,7 +30,10 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
   const [newTagColor, setNewTagColor] = useState(DEFAULT_COLORS[0])
   const [tagError, setTagError] = useState('')
   const [localError, setLocalError] = useState('')
-  const isEditing = !!note
+  const [activeTab, setActiveTab] = useState('content')
+  const { user } = useAuth()
+  const isEditing = !!note && !viewOnly
+  const isViewing = viewOnly && !!note
 
   const fetchTags = async () => {
     try {
@@ -62,7 +67,8 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
     setIsCreatingTag(false)
     setNewTagName('')
     setTagError('')
-  }, [note, isOpen])
+    setActiveTab('content')
+  }, [note, isOpen, viewOnly])
 
   useEffect(() => {
     if (error && isOpen) {
@@ -175,149 +181,216 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal note-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{isEditing ? '编辑笔记' : '新建笔记'}</h2>
+          <h2>{isViewing ? '笔记详情' : isEditing ? '编辑笔记' : '新建笔记'}</h2>
           <button className="btn-close" onClick={onClose}>
             &times;
           </button>
         </div>
         {localError && <div className="error-message">{localError}</div>}
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="title">标题</label>
-            <input
-              id="title"
-              type="text"
-              className="form-input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="请输入笔记标题"
-              autoFocus
-            />
+
+        {isViewing && (
+          <div className="modal-tabs">
+            <button
+              className={`modal-tab ${activeTab === 'content' ? 'active' : ''}`}
+              onClick={() => setActiveTab('content')}
+            >
+              📝 笔记内容
+            </button>
+            <button
+              className={`modal-tab ${activeTab === 'comments' ? 'active' : ''}`}
+              onClick={() => setActiveTab('comments')}
+            >
+              💬 评论区 {note?.comment_count > 0 && `(${note.comment_count})`}
+            </button>
           </div>
-          <div className="form-group">
-            <label htmlFor="content">内容</label>
-            <RichTextEditor
-              value={content}
-              onChange={setContent}
-              placeholder="请输入笔记内容..."
-            />
-          </div>
-          <div className="form-group">
-            <label>
-              标签
-              <span className="label-hint">（点击选择，可多选）</span>
-            </label>
+        )}
 
-            {selectedTags.length > 0 && (
-              <div className="selected-tags">
-                {selectedTags.map((tag) => (
-                  <span
-                    key={tag.id}
-                    className="tag-badge removable"
-                    style={{
-                      backgroundColor: tag.color,
-                      color: getContrastColor(tag.color),
-                    }}
-                  >
-                    {tag.name}
-                    <button
-                      type="button"
-                      className="tag-remove-btn"
-                      onClick={(e) => removeTag(tag.id, e)}
-                      aria-label="移除标签"
-                    >
-                      &times;
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <div className="tag-selector">
-              {availableTags.map((tag) => (
-                <button
-                  key={tag.id}
-                  type="button"
-                  className={`tag-select-btn ${selectedTagIds.includes(tag.id) ? 'selected' : ''}`}
-                  style={{
-                    backgroundColor: selectedTagIds.includes(tag.id) ? tag.color : 'transparent',
-                    borderColor: tag.color,
-                    color: selectedTagIds.includes(tag.id) ? getContrastColor(tag.color) : tag.color,
-                  }}
-                  onClick={() => toggleTag(tag.id)}
-                >
-                  {tag.name}
-                </button>
-              ))}
-
-              {!isCreatingTag ? (
-                <button
-                  type="button"
-                  className="tag-select-btn add-tag-btn"
-                  onClick={() => setIsCreatingTag(true)}
-                >
-                  + 新建标签
-                </button>
+        {(!isViewing || activeTab === 'content') && (
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label htmlFor="title">标题</label>
+              {isViewing ? (
+                <div className="note-view-title">{title}</div>
               ) : (
-                <div className="create-tag-inline">
-                  {tagError && <div className="error-message small">{tagError}</div>}
-                  <div className="create-tag-form">
-                    <div
-                      className="color-preview small"
-                      style={{ backgroundColor: newTagColor }}
-                    />
-                    <input
-                      type="text"
-                      className="form-input small"
-                      placeholder="标签名称"
-                      value={newTagName}
-                      onChange={(e) => setNewTagName(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      maxLength={50}
-                      autoFocus
-                    />
-                    <div className="color-palette tiny">
-                      {DEFAULT_COLORS.map((color) => (
-                        <button
-                          key={color}
-                          type="button"
-                          className={`color-option ${newTagColor === color ? 'selected' : ''}`}
-                          style={{ backgroundColor: color }}
-                          onClick={() => setNewTagColor(color)}
-                        />
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-tiny"
-                      onClick={handleCreateTag}
-                    >
-                      添加
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-tiny"
-                      onClick={() => {
-                        setIsCreatingTag(false)
-                        setTagError('')
-                      }}
-                    >
-                      取消
-                    </button>
-                  </div>
-                </div>
+                <input
+                  id="title"
+                  type="text"
+                  className="form-input"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="请输入笔记标题"
+                  autoFocus
+                />
               )}
             </div>
-          </div>
+            <div className="form-group">
+              <label htmlFor="content">内容</label>
+              {isViewing ? (
+                <div className="note-view-content" dangerouslySetInnerHTML={{ __html: content }} />
+              ) : (
+                <RichTextEditor
+                  value={content}
+                  onChange={setContent}
+                  placeholder="请输入笔记内容..."
+                />
+              )}
+            </div>
+            {!isViewing && (
+              <div className="form-group">
+                <label>
+                  标签
+                  <span className="label-hint">（点击选择，可多选）</span>
+                </label>
+
+                {selectedTags.length > 0 && (
+                  <div className="selected-tags">
+                    {selectedTags.map((tag) => (
+                      <span
+                        key={tag.id}
+                        className="tag-badge removable"
+                        style={{
+                          backgroundColor: tag.color,
+                          color: getContrastColor(tag.color),
+                        }}
+                      >
+                        {tag.name}
+                        <button
+                          type="button"
+                          className="tag-remove-btn"
+                          onClick={(e) => removeTag(tag.id, e)}
+                          aria-label="移除标签"
+                        >
+                          &times;
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="tag-selector">
+                  {availableTags.map((tag) => (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      className={`tag-select-btn ${selectedTagIds.includes(tag.id) ? 'selected' : ''}`}
+                      style={{
+                        backgroundColor: selectedTagIds.includes(tag.id) ? tag.color : 'transparent',
+                        borderColor: tag.color,
+                        color: selectedTagIds.includes(tag.id) ? getContrastColor(tag.color) : tag.color,
+                      }}
+                      onClick={() => toggleTag(tag.id)}
+                    >
+                      {tag.name}
+                    </button>
+                  ))}
+
+                  {!isCreatingTag ? (
+                    <button
+                      type="button"
+                      className="tag-select-btn add-tag-btn"
+                      onClick={() => setIsCreatingTag(true)}
+                    >
+                      + 新建标签
+                    </button>
+                  ) : (
+                    <div className="create-tag-inline">
+                      {tagError && <div className="error-message small">{tagError}</div>}
+                      <div className="create-tag-form">
+                        <div
+                          className="color-preview small"
+                          style={{ backgroundColor: newTagColor }}
+                        />
+                        <input
+                          type="text"
+                          className="form-input small"
+                          placeholder="标签名称"
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          maxLength={50}
+                          autoFocus
+                        />
+                        <div className="color-palette tiny">
+                          {DEFAULT_COLORS.map((color) => (
+                            <button
+                              key={color}
+                              type="button"
+                              className={`color-option ${newTagColor === color ? 'selected' : ''}`}
+                              style={{ backgroundColor: color }}
+                              onClick={() => setNewTagColor(color)}
+                            />
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-tiny"
+                          onClick={handleCreateTag}
+                        >
+                          添加
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-tiny"
+                          onClick={() => {
+                            setIsCreatingTag(false)
+                            setTagError('')
+                          }}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {isViewing && selectedTags.length > 0 && (
+              <div className="form-group">
+                <label>标签</label>
+                <div className="selected-tags">
+                  {selectedTags.map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="tag-badge"
+                      style={{
+                        backgroundColor: tag.color,
+                        color: getContrastColor(tag.color),
+                      }}
+                    >
+                      {tag.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!isViewing && (
+              <div className="modal-actions">
+                <button type="button" className="btn btn-secondary" onClick={onClose}>
+                  取消
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  {isEditing ? '保存' : '创建'}
+                </button>
+              </div>
+            )}
+          </form>
+        )}
+
+        {isViewing && activeTab === 'comments' && note && (
+          <CommentsSection
+            noteId={note.id}
+            noteOwnerId={note.user_id}
+            onCommentsChange={onCommentsChange}
+          />
+        )}
+
+        {isViewing && (
           <div className="modal-actions">
             <button type="button" className="btn btn-secondary" onClick={onClose}>
-              取消
-            </button>
-            <button type="submit" className="btn btn-primary">
-              {isEditing ? '保存' : '创建'}
+              关闭
             </button>
           </div>
-        </form>
+        )}
       </div>
     </div>
   )

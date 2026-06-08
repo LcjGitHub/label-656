@@ -43,6 +43,7 @@ const NoteCard = ({
   selected = false,
   onSelect,
   viewMode = 'all',
+  onView,
 }) => {
   const [showPinPriority, setShowPinPriority] = useState(false)
   const [pinPriority, setPinPriority] = useState(note.pin_priority || 0)
@@ -239,8 +240,17 @@ const NoteCard = ({
   const isPinned = note.is_pinned === 1
   const isFavorited = note.is_favorited === 1
 
+  const handleCardClick = () => {
+    if (!isTrash && onView) {
+      onView(note)
+    }
+  }
+
   return (
-    <div className={`note-card ${isPinned ? 'pinned' : ''} ${isFavorited ? 'favorited' : ''} ${selected ? 'selected' : ''}`}>
+    <div
+      className={`note-card ${isPinned ? 'pinned' : ''} ${isFavorited ? 'favorited' : ''} ${selected ? 'selected' : ''}`}
+      onClick={handleCardClick}
+    >
       {selectable && (
         <div className="note-checkbox">
           <input
@@ -472,6 +482,22 @@ const NoteCard = ({
         )}
         {!isTrash && note.is_shared === 1 && (
           <span>🔗 已分享 {note.share_view_count ? `(${note.share_view_count} 次访问)` : ''}</span>
+        )}
+        {!isTrash && note.comment_count > 0 && (
+          <span
+            className="note-comment-info"
+            onClick={(e) => { e.stopPropagation(); onView && onView(note); }}
+            title="点击查看评论"
+          >
+            💬 {note.comment_count} 条评论
+            {note.last_comment_preview && (
+              <span className="note-last-comment-preview">
+                : {note.last_comment_preview.length > 50
+                  ? note.last_comment_preview.substring(0, 50) + '...'
+                  : note.last_comment_preview}
+              </span>
+            )}
+          </span>
         )}
         {isTrash && note.deleted_at && (
           <span style={{ color: '#e74c3c', fontWeight: 'bold' }}>
