@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, status, File, Upload
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import text, inspect
 from typing import List, Optional
 from datetime import timedelta, datetime
 import os
@@ -14,6 +15,7 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 import bleach
+from html import unescape
 
 from database import engine, Base, get_db
 from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
@@ -32,7 +34,40 @@ from auth import (
     get_current_active_user, ACCESS_TOKEN_EXPIRE_MINUTES
 )
 
+
+def run_database_migration():
+    inspector = inspect(engine)
+    conn = engine.connect()
+    try:
+        if not inspector.has_table("notes"):
+            Base.metadata.create_all(bind=engine)
+            return
+
+        columns = [col["name"] for col in inspector.get_columns("notes")]
+
+        if "content_plain" not in columns:
+            conn.execute(text("ALTER TABLE notes ADD COLUMN content_plain TEXT"))
+            conn.commit()
+            notes = conn.execute(text("SELECT id, content FROM notes")).fetchall()
+            for note_id, content in notes:
+                if content:
+                    plain_text = html_to_plain_text(content)
+                    conn.execute(
+                        text("UPDATE notes SET content_plain = :plain WHERE id = :nid"),
+                        {"plain": plain_text, "nid": note_id}
+                    )
+            conn.commit()
+            print(f"Migration: content_plain 字段已添加，回填 {len(notes)} 条记录")
+
+    except Exception as e:
+        print(f"Database migration error: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
 Base.metadata.create_all(bind=engine)
+run_database_migration()
 
 app = FastAPI(title="笔记管理 API")
 
@@ -492,16 +527,10 @@ ALLOWED_TAGS = [
 ]
 
 ALLOWED_ATTRIBUTES = {
-    '*': ['class', 'style'],
+    '*': ['class'],
     'a': ['href', 'title', 'target', 'rel'],
     'img': ['src', 'alt', 'title', 'width', 'height'],
 }
-
-ALLOWED_STYLES = [
-    'color', 'background-color', 'font-size', 'font-weight',
-    'font-style', 'text-decoration', 'text-align',
-    'margin', 'padding', 'line-height',
-]
 
 
 def sanitize_html(html_content: str) -> str:
@@ -511,7 +540,6 @@ def sanitize_html(html_content: str) -> str:
         html_content,
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
-        styles=ALLOWED_STYLES,
         strip=True,
         strip_comments=True,
     )
@@ -525,13 +553,11 @@ def html_to_plain_text(html_content: str) -> str:
     text = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
     text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</li>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</div>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</h[1-6]>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'&nbsp;', ' ', text)
-    text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
-    text = re.sub(r'&quot;', '"', text)
-    text = re.sub(r'&#39;', "'", text)
+    text = unescape(text)
+    text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
