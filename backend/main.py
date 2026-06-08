@@ -562,6 +562,105 @@ def batch_unfavorite_notes(
     return {"message": f"成功取消 {len(notes)} 条笔记的收藏", "unfavorited_count": len(notes)}
 
 
+@app.get("/api/notes/trash", response_model=List[Note])
+def get_trash_notes(
+    search: Optional[str] = Query(None, description="关键词搜索"),
+    deleted_from: Optional[str] = Query(None, description="删除开始日期 YYYY-MM-DD"),
+    deleted_to: Optional[str] = Query(None, description="删除结束日期 YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    cleanup_expired_trash_notes(db)
+    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.user_id == current_user.id,
+        NoteModel.deleted_at.isnot(None)
+    )
+    if search:
+        query = query.filter(
+            (NoteModel.title.contains(search)) |
+            (NoteModel.content_plain.contains(search))
+        )
+    if deleted_from:
+        try:
+            from_date = datetime.strptime(deleted_from, "%Y-%m-%d")
+            query = query.filter(NoteModel.deleted_at >= from_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="deleted_from 格式错误，应为 YYYY-MM-DD")
+    if deleted_to:
+        try:
+            to_date = datetime.strptime(deleted_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(NoteModel.deleted_at < to_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="deleted_to 格式错误，应为 YYYY-MM-DD")
+    notes = query.order_by(NoteModel.deleted_at.desc()).all()
+    return notes
+
+
+@app.get("/api/notes/trash/count", response_model=NoteTrashCountResponse)
+def get_trash_count(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    cleanup_expired_trash_notes(db)
+    count = db.query(NoteModel).filter(
+        NoteModel.user_id == current_user.id,
+        NoteModel.deleted_at.isnot(None)
+    ).count()
+    return {"count": count}
+
+
+@app.put("/api/notes/batch/restore")
+def batch_restore_notes(
+    request: NoteBatchRestoreRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    if not request.note_ids:
+        raise HTTPException(status_code=400, detail="请选择要恢复的笔记")
+
+    notes = db.query(NoteModel).filter(
+        NoteModel.id.in_(request.note_ids),
+        NoteModel.user_id == current_user.id,
+        NoteModel.deleted_at.isnot(None)
+    ).all()
+
+    if not notes:
+        raise HTTPException(status_code=404, detail="未找到要恢复的笔记")
+
+    for note in notes:
+        note.deleted_at = None
+
+    db.commit()
+    return {"message": f"成功恢复 {len(notes)} 条笔记", "restored_count": len(notes)}
+
+
+@app.post("/api/notes/batch/permanent-delete")
+def batch_permanent_delete_notes(
+    request: NoteBatchPermanentDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    if not request.note_ids:
+        raise HTTPException(status_code=400, detail="请选择要永久删除的笔记")
+
+    notes = db.query(NoteModel).filter(
+        NoteModel.id.in_(request.note_ids),
+        NoteModel.user_id == current_user.id,
+        NoteModel.deleted_at.isnot(None)
+    ).all()
+
+    if not notes:
+        raise HTTPException(status_code=404, detail="未找到要永久删除的笔记")
+
+    deleted_count = 0
+    for note in notes:
+        db.delete(note)
+        deleted_count += 1
+
+    db.commit()
+    return {"message": f"成功永久删除 {deleted_count} 条笔记", "deleted_count": deleted_count}
+
+
 @app.get("/api/notes/{note_id}", response_model=Note)
 def get_note(
     note_id: int,
@@ -738,53 +837,6 @@ def permanent_delete_note(
     return {"message": "笔记已永久删除"}
 
 
-@app.get("/api/notes/trash", response_model=List[Note])
-def get_trash_notes(
-    search: Optional[str] = Query(None, description="关键词搜索"),
-    deleted_from: Optional[str] = Query(None, description="删除开始日期 YYYY-MM-DD"),
-    deleted_to: Optional[str] = Query(None, description="删除结束日期 YYYY-MM-DD"),
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_active_user)
-):
-    cleanup_expired_trash_notes(db)
-    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    )
-    if search:
-        query = query.filter(
-            (NoteModel.title.contains(search)) |
-            (NoteModel.content_plain.contains(search))
-        )
-    if deleted_from:
-        try:
-            from_date = datetime.strptime(deleted_from, "%Y-%m-%d")
-            query = query.filter(NoteModel.deleted_at >= from_date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="deleted_from 格式错误，应为 YYYY-MM-DD")
-    if deleted_to:
-        try:
-            to_date = datetime.strptime(deleted_to, "%Y-%m-%d") + timedelta(days=1)
-            query = query.filter(NoteModel.deleted_at < to_date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="deleted_to 格式错误，应为 YYYY-MM-DD")
-    notes = query.order_by(NoteModel.deleted_at.desc()).all()
-    return notes
-
-
-@app.get("/api/notes/trash/count", response_model=NoteTrashCountResponse)
-def get_trash_count(
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_active_user)
-):
-    cleanup_expired_trash_notes(db)
-    count = db.query(NoteModel).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).count()
-    return {"count": count}
-
-
 @app.put("/api/notes/{note_id}/restore")
 def restore_note(
     note_id: int,
@@ -804,58 +856,6 @@ def restore_note(
     db.refresh(db_note)
     restored = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
     return {"message": "笔记已恢复", "note": restored}
-
-
-@app.put("/api/notes/batch/restore")
-def batch_restore_notes(
-    request: NoteBatchRestoreRequest,
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_active_user)
-):
-    if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要恢复的笔记")
-
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).all()
-
-    if not notes:
-        raise HTTPException(status_code=404, detail="未找到要恢复的笔记")
-
-    for note in notes:
-        note.deleted_at = None
-
-    db.commit()
-    return {"message": f"成功恢复 {len(notes)} 条笔记", "restored_count": len(notes)}
-
-
-@app.post("/api/notes/batch/permanent-delete")
-def batch_permanent_delete_notes(
-    request: NoteBatchPermanentDeleteRequest,
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_active_user)
-):
-    if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要永久删除的笔记")
-
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).all()
-
-    if not notes:
-        raise HTTPException(status_code=404, detail="未找到要永久删除的笔记")
-
-    deleted_count = 0
-    for note in notes:
-        db.delete(note)
-        deleted_count += 1
-
-    db.commit()
-    return {"message": f"成功永久删除 {deleted_count} 条笔记", "deleted_count": deleted_count}
 
 
 @app.post("/api/notes/{note_id}/tags", response_model=Note)
