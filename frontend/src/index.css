@@ -2017,3 +2017,149 @@ body {
   color: #7f8c8d;
   margin: 0;
 }
+
+.rich-text-editor {
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.3s;
+}
+
+.rich-text-editor:focus-within {
+  border-color: #3498db;
+}
+
+.rich-text-editor .quill {
+  background: white;
+}
+
+.rich-text-editor .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid #e0e0e0;
+  background: #fafafa;
+  padding: 8px;
+}
+
+.rich-text-editor .ql-container.ql-snow {
+  border: none;
+  min-height: 200px;
+  font-size: 1rem;
+}
+
+.rich-text-editor .ql-editor {
+  min-height: 200px;
+  padding: 12px 16px;
+  line-height: 1.6;
+}
+
+.rich-text-editor .ql-editor.ql-blank::before {
+  color: #95a5a6;
+  font-style: normal;
+}
+
+.note-content-rich {
+  color: #555;
+  margin-bottom: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.note-content-rich p {
+  margin-bottom: 8px;
+}
+
+.note-content-rich h1,
+.note-content-rich h2,
+.note-content-rich h3,
+.note-content-rich h4,
+.note-content-rich h5,
+.note-content-rich h6 {
+  color: #2c3e50;
+  margin: 16px 0 8px 0;
+  line-height: 1.3;
+}
+
+.note-content-rich h1 { font-size: 1.5rem; font-weight: 700; }
+.note-content-rich h2 { font-size: 1.35rem; font-weight: 600; }
+.note-content-rich h3 { font-size: 1.2rem; font-weight: 600; }
+
+.note-content-rich ul,
+.note-content-rich ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.note-content-rich li {
+  margin-bottom: 4px;
+}
+
+.note-content-rich strong,
+.note-content-rich b {
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+.note-content-rich em,
+.note-content-rich i {
+  font-style: italic;
+}
+
+.note-content-rich u {
+  text-decoration: underline;
+}
+
+.note-content-rich s {
+  text-decoration: line-through;
+}
+
+.note-content-rich a {
+  color: #3498db;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.note-content-rich a:hover {
+  border-bottom-color: #3498db;
+}
+
+.note-content-rich img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.note-content-rich blockquote {
+  border-left: 4px solid #3498db;
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: #f8f9fa;
+  color: #555;
+  border-radius: 0 6px 6px 0;
+}
+
+.note-content-rich pre {
+  background: #2c3e50;
+  color: #ecf0f1;
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 12px 0;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+}
+
+.note-content-rich code {
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9em;
+}
+
+.note-content-rich pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}

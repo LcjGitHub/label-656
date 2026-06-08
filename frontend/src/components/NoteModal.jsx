@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { tagApi } from '../services/api.js'
+import RichTextEditor from './RichTextEditor.jsx'
+import { htmlToPlainText } from '../utils/htmlUtils.js'
 
 const DEFAULT_COLORS = [
   '#3498db',
@@ -123,7 +125,7 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
 
   const validateForm = () => {
     const trimmedTitle = title.trim()
-    const trimmedContent = content.trim()
+    const plainContent = htmlToPlainText(content).trim()
 
     if (!trimmedTitle) {
       setLocalError('标题不能为空或仅包含空格')
@@ -133,11 +135,11 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
       setLocalError('标题长度不能超过200个字符')
       return false
     }
-    if (!trimmedContent) {
+    if (!plainContent) {
       setLocalError('内容不能为空或仅包含空格')
       return false
     }
-    if (trimmedContent.length > 2000) {
+    if (plainContent.length > 2000) {
       setLocalError('内容长度不能超过2000个字符')
       return false
     }
@@ -194,12 +196,10 @@ const NoteModal = ({ isOpen, onClose, onSubmit, note, error, onTagsChange }) => 
           </div>
           <div className="form-group">
             <label htmlFor="content">内容</label>
-            <textarea
-              id="content"
-              className="form-textarea"
+            <RichTextEditor
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="请输入笔记内容"
+              onChange={setContent}
+              placeholder="请输入笔记内容..."
             />
           </div>
           <div className="form-group">

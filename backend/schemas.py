@@ -118,6 +118,7 @@ class TokenData(BaseModel):
 class NoteBase(BaseModel):
     title: str
     content: str
+    content_plain: Optional[str] = None
 
 
 class NoteCreate(NoteBase):

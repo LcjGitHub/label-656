@@ -10,8 +10,10 @@ import uuid
 import csv
 import io
 import time
+import re
 from pathlib import Path
 from urllib.parse import quote
+import bleach
 
 from database import engine, Base, get_db
 from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
@@ -215,7 +217,7 @@ def get_notes(
     if search:
         query = query.filter(
             (NoteModel.title.contains(search)) |
-            (NoteModel.content.contains(search))
+            (NoteModel.content_plain.contains(search))
         )
     if tag_id:
         tag = db.query(TagModel).filter(
@@ -254,7 +256,7 @@ def get_favorite_notes(
     if search:
         query = query.filter(
             (NoteModel.title.contains(search)) |
-            (NoteModel.content.contains(search))
+            (NoteModel.content_plain.contains(search))
         )
     if tag_id:
         tag = db.query(TagModel).filter(
@@ -287,7 +289,7 @@ def get_pinned_notes(
     if search:
         query = query.filter(
             (NoteModel.title.contains(search)) |
-            (NoteModel.content.contains(search))
+            (NoteModel.content_plain.contains(search))
         )
     if tag_id:
         tag = db.query(TagModel).filter(
@@ -480,6 +482,60 @@ def get_note(
     return note
 
 
+ALLOWED_TAGS = [
+    'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li',
+    'a', 'img',
+    'blockquote', 'pre', 'code',
+    'span', 'div',
+]
+
+ALLOWED_ATTRIBUTES = {
+    '*': ['class', 'style'],
+    'a': ['href', 'title', 'target', 'rel'],
+    'img': ['src', 'alt', 'title', 'width', 'height'],
+}
+
+ALLOWED_STYLES = [
+    'color', 'background-color', 'font-size', 'font-weight',
+    'font-style', 'text-decoration', 'text-align',
+    'margin', 'padding', 'line-height',
+]
+
+
+def sanitize_html(html_content: str) -> str:
+    if not html_content:
+        return ''
+    cleaned = bleach.clean(
+        html_content,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRIBUTES,
+        styles=ALLOWED_STYLES,
+        strip=True,
+        strip_comments=True,
+    )
+    cleaned = bleach.linkify(cleaned)
+    return cleaned
+
+
+def html_to_plain_text(html_content: str) -> str:
+    if not html_content:
+        return ''
+    text = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
+    text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</li>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&lt;', '<', text)
+    text = re.sub(r'&gt;', '>', text)
+    text = re.sub(r'&quot;', '"', text)
+    text = re.sub(r'&#39;', "'", text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def validate_note_data(title: str = None, content: str = None):
     if title is not None:
         if not title.strip():
@@ -487,9 +543,10 @@ def validate_note_data(title: str = None, content: str = None):
         if len(title.strip()) > 200:
             raise HTTPException(status_code=400, detail="标题长度不能超过200个字符")
     if content is not None:
-        if not content.strip():
+        plain_text = html_to_plain_text(content)
+        if not plain_text:
             raise HTTPException(status_code=400, detail="内容不能为空或仅包含空格")
-        if len(content.strip()) > 2000:
+        if len(plain_text) > 2000:
             raise HTTPException(status_code=400, detail="内容长度不能超过2000个字符")
 
 
@@ -500,9 +557,12 @@ def create_note(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     validate_note_data(title=note.title, content=note.content)
+    sanitized_content = sanitize_html(note.content)
+    plain_content = html_to_plain_text(sanitized_content)
     db_note = NoteModel(
         title=note.title.strip(),
-        content=note.content.strip(),
+        content=sanitized_content,
+        content_plain=plain_content,
         user_id=current_user.id
     )
     if note.tag_ids:
@@ -536,7 +596,9 @@ def update_note(
     if note.title is not None:
         db_note.title = note.title.strip()
     if note.content is not None:
-        db_note.content = note.content.strip()
+        sanitized_content = sanitize_html(note.content)
+        db_note.content = sanitized_content
+        db_note.content_plain = html_to_plain_text(sanitized_content)
     if note.tag_ids is not None:
         tags = db.query(TagModel).filter(
             TagModel.id.in_(note.tag_ids),
@@ -1081,6 +1143,12 @@ def format_note_date(dt) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def get_note_plain_content(note) -> str:
+    if note.content_plain:
+        return note.content_plain
+    return html_to_plain_text(note.content or "")
+
+
 def note_to_markdown(note, include_tags: bool = True, include_metadata: bool = True) -> str:
     lines = []
     lines.append(f"# {note.title or '无标题'}")
@@ -1110,7 +1178,7 @@ def note_to_markdown(note, include_tags: bool = True, include_metadata: bool = T
 
     lines.append("---")
     lines.append("")
-    lines.append(note.content or "")
+    lines.append(get_note_plain_content(note))
     lines.append("")
 
     return "\n".join(lines)
@@ -1146,7 +1214,7 @@ def note_to_txt(note, include_tags: bool = True, include_metadata: bool = True) 
 
     lines.append("-" * 50)
     lines.append("")
-    lines.append(note.content or "")
+    lines.append(get_note_plain_content(note))
     lines.append("")
 
     return "\n".join(lines)
@@ -1184,7 +1252,7 @@ def notes_to_single_markdown(notes, include_tags: bool = True, include_metadata:
             lines.append(f"**标签**: {', '.join(tag_names)}")
             lines.append("")
 
-        lines.append(note.content or "")
+        lines.append(get_note_plain_content(note))
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -1225,7 +1293,7 @@ def notes_to_single_txt(notes, include_tags: bool = True, include_metadata: bool
             lines.append(f"标签: {', '.join(tag_names)}")
             lines.append("")
 
-        lines.append(note.content or "")
+        lines.append(get_note_plain_content(note))
         lines.append("")
         lines.append("=" * 50)
         lines.append("")

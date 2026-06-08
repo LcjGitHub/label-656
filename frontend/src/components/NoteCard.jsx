@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { noteApi, parseBlobError } from '../services/api.js'
+import { htmlToPlainText } from '../utils/htmlUtils.js'
 
 const escapeRegExp = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -116,6 +117,46 @@ const NoteCard = ({
         part
       )
     )
+  }
+
+  const highlightHtml = (html, keyword) => {
+    if (!keyword) {
+      return <div className="note-content-rich" dangerouslySetInnerHTML={{ __html: html }} />
+    }
+    const escapedKeyword = escapeRegExp(keyword)
+    const tmp = document.createElement('div')
+    tmp.innerHTML = html
+    const walker = document.createTreeWalker(
+      tmp,
+      NodeFilter.SHOW_TEXT,
+      null
+    )
+    const textNodes = []
+    let node
+    while (node = walker.nextNode()) {
+      if (node.nodeValue.toLowerCase().includes(keyword.toLowerCase())) {
+        textNodes.push(node)
+      }
+    }
+    textNodes.forEach(textNode => {
+      const parent = textNode.parentNode
+      const text = textNode.nodeValue
+      const regex = new RegExp(`(${escapedKeyword})`, 'gi')
+      const parts = text.split(regex)
+      const fragment = document.createDocumentFragment()
+      parts.forEach(part => {
+        if (part.toLowerCase() === keyword.toLowerCase()) {
+          const span = document.createElement('span')
+          span.className = 'highlight'
+          span.textContent = part
+          fragment.appendChild(span)
+        } else if (part) {
+          fragment.appendChild(document.createTextNode(part))
+        }
+      })
+      parent.replaceChild(fragment, textNode)
+    })
+    return <div className="note-content-rich" dangerouslySetInnerHTML={{ __html: tmp.innerHTML }} />
   }
 
   const handleFavoriteToggle = async (e) => {
@@ -357,9 +398,7 @@ const NoteCard = ({
           </button>
         </div>
       </div>
-      <p className="note-content">
-        {highlightText(note.content, searchKeyword)}
-      </p>
+      {highlightHtml(note.content, searchKeyword)}
       {note.tags && note.tags.length > 0 && (
         <div className="note-tags">
           {note.tags.map((tag) => (
