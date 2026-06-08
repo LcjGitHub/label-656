@@ -1,14 +1,15 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from datetime import timedelta
+from datetime import timedelta, datetime
 import os
 import shutil
 import uuid
 import csv
 import io
+import zipfile
 from pathlib import Path
 
 from database import engine, Base, get_db
@@ -20,7 +21,8 @@ from schemas import (
     FileResponse as FileSchema, FileUploadResponse,
     FileDeleteResponse, FileBatchDeleteRequest,
     DocumentPreviewResponse,
-    Tag, TagCreate, TagUpdate
+    Tag, TagCreate, TagUpdate,
+    NoteExportRequest, NoteExportResponse
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -1003,4 +1005,308 @@ def get_image_blob(
     return FileResponse(
         path=file.file_path,
         media_type=file.file_type
+    )
+
+
+EXPORT_DIR = UPLOAD_DIR / "exports"
+EXPORT_DIR.mkdir(exist_ok=True)
+
+
+def sanitize_filename(filename: str) -> str:
+    invalid_chars = '<>:"/\\|?*'
+    for char in invalid_chars:
+        filename = filename.replace(char, '_')
+    filename = filename.strip()
+    filename = filename[:100] if len(filename) > 100 else filename
+    return filename or "untitled"
+
+
+def format_note_date(dt) -> str:
+    if not dt:
+        return ""
+    if isinstance(dt, str):
+        return dt
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def note_to_markdown(note, include_tags: bool = True, include_metadata: bool = True) -> str:
+    lines = []
+    lines.append(f"# {note.title or '无标题'}")
+    lines.append("")
+
+    if include_metadata:
+        metadata_parts = []
+        metadata_parts.append(f"- 创建时间: {format_note_date(note.created_at)}")
+        if note.updated_at:
+            metadata_parts.append(f"- 更新时间: {format_note_date(note.updated_at)}")
+        if note.is_favorited == 1:
+            metadata_parts.append(f"- 收藏: 是")
+            if note.favorited_at:
+                metadata_parts.append(f"- 收藏时间: {format_note_date(note.favorited_at)}")
+        if note.is_pinned == 1:
+            metadata_parts.append(f"- 置顶: 是 (优先级: {note.pin_priority})")
+            if note.pinned_at:
+                metadata_parts.append(f"- 置顶时间: {format_note_date(note.pinned_at)}")
+        if metadata_parts:
+            lines.extend(metadata_parts)
+            lines.append("")
+
+    if include_tags and note.tags and len(note.tags) > 0:
+        tag_names = [f"`{tag.name}`" for tag in note.tags]
+        lines.append(f"**标签**: {', '.join(tag_names)}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(note.content or "")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def note_to_txt(note, include_tags: bool = True, include_metadata: bool = True) -> str:
+    lines = []
+    lines.append(f"{note.title or '无标题'}")
+    lines.append("=" * 50)
+    lines.append("")
+
+    if include_metadata:
+        metadata_parts = []
+        metadata_parts.append(f"创建时间: {format_note_date(note.created_at)}")
+        if note.updated_at:
+            metadata_parts.append(f"更新时间: {format_note_date(note.updated_at)}")
+        if note.is_favorited == 1:
+            metadata_parts.append(f"收藏: 是")
+            if note.favorited_at:
+                metadata_parts.append(f"收藏时间: {format_note_date(note.favorited_at)}")
+        if note.is_pinned == 1:
+            metadata_parts.append(f"置顶: 是 (优先级: {note.pin_priority})")
+            if note.pinned_at:
+                metadata_parts.append(f"置顶时间: {format_note_date(note.pinned_at)}")
+        if metadata_parts:
+            lines.extend(metadata_parts)
+            lines.append("")
+
+    if include_tags and note.tags and len(note.tags) > 0:
+        tag_names = [tag.name for tag in note.tags]
+        lines.append(f"标签: {', '.join(tag_names)}")
+        lines.append("")
+
+    lines.append("-" * 50)
+    lines.append("")
+    lines.append(note.content or "")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def notes_to_single_markdown(notes, include_tags: bool = True, include_metadata: bool = True) -> str:
+    lines = []
+    lines.append(f"# 笔记导出")
+    lines.append(f"")
+    lines.append(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"笔记数量: {len(notes)}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for i, note in enumerate(notes, 1):
+        lines.append(f"## {i}. {note.title or '无标题'}")
+        lines.append("")
+
+        if include_metadata:
+            metadata_parts = []
+            metadata_parts.append(f"- 创建时间: {format_note_date(note.created_at)}")
+            if note.updated_at:
+                metadata_parts.append(f"- 更新时间: {format_note_date(note.updated_at)}")
+            if note.is_favorited == 1:
+                metadata_parts.append(f"- 收藏: 是")
+            if note.is_pinned == 1:
+                metadata_parts.append(f"- 置顶: 是 (优先级: {note.pin_priority})")
+            if metadata_parts:
+                lines.extend(metadata_parts)
+                lines.append("")
+
+        if include_tags and note.tags and len(note.tags) > 0:
+            tag_names = [f"`{tag.name}`" for tag in note.tags]
+            lines.append(f"**标签**: {', '.join(tag_names)}")
+            lines.append("")
+
+        lines.append(note.content or "")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def notes_to_single_txt(notes, include_tags: bool = True, include_metadata: bool = True) -> str:
+    lines = []
+    lines.append("笔记导出")
+    lines.append("=" * 50)
+    lines.append("")
+    lines.append(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"笔记数量: {len(notes)}")
+    lines.append("")
+    lines.append("=" * 50)
+    lines.append("")
+
+    for i, note in enumerate(notes, 1):
+        lines.append(f"{i}. {note.title or '无标题'}")
+        lines.append("-" * 40)
+
+        if include_metadata:
+            metadata_parts = []
+            metadata_parts.append(f"创建时间: {format_note_date(note.created_at)}")
+            if note.updated_at:
+                metadata_parts.append(f"更新时间: {format_note_date(note.updated_at)}")
+            if note.is_favorited == 1:
+                metadata_parts.append(f"收藏: 是")
+            if note.is_pinned == 1:
+                metadata_parts.append(f"置顶: 是 (优先级: {note.pin_priority})")
+            if metadata_parts:
+                lines.extend(metadata_parts)
+                lines.append("")
+
+        if include_tags and note.tags and len(note.tags) > 0:
+            tag_names = [tag.name for tag in note.tags]
+            lines.append(f"标签: {', '.join(tag_names)}")
+            lines.append("")
+
+        lines.append(note.content or "")
+        lines.append("")
+        lines.append("=" * 50)
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@app.post("/api/notes/export", response_model=NoteExportResponse)
+def export_notes(
+    request: NoteExportRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    fmt = request.format.lower()
+    if fmt not in ("md", "txt"):
+        raise HTTPException(status_code=400, detail="不支持的导出格式，仅支持 md 和 txt")
+
+    if request.note_ids and len(request.note_ids) > 0:
+        notes = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+            NoteModel.id.in_(request.note_ids),
+            NoteModel.user_id == current_user.id
+        ).order_by(NoteModel.created_at.desc()).all()
+        if not notes:
+            raise HTTPException(status_code=404, detail="未找到要导出的笔记")
+    else:
+        notes = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+            NoteModel.user_id == current_user.id
+        ).order_by(NoteModel.created_at.desc()).all()
+        if not notes:
+            raise HTTPException(status_code=404, detail="没有可导出的笔记")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_ext = fmt
+
+    if len(notes) == 1:
+        note = notes[0]
+        base_name = sanitize_filename(note.title or "note")
+        filename = f"{base_name}_{timestamp}.{file_ext}"
+        file_path = EXPORT_DIR / filename
+
+        if fmt == "md":
+            content = note_to_markdown(note, request.include_tags, request.include_metadata)
+        else:
+            content = note_to_txt(note, request.include_tags, request.include_metadata)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+    else:
+        base_name = f"notes_export_{len(notes)}"
+        filename = f"{base_name}_{timestamp}.{file_ext}"
+        file_path = EXPORT_DIR / filename
+
+        if fmt == "md":
+            content = notes_to_single_markdown(notes, request.include_tags, request.include_metadata)
+        else:
+            content = notes_to_single_txt(notes, request.include_tags, request.include_metadata)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    file_size = os.path.getsize(file_path)
+    download_url = f"/api/exports/download/{file_path.name}"
+
+    return NoteExportResponse(
+        message=f"成功导出 {len(notes)} 条笔记",
+        filename=filename,
+        download_url=download_url,
+        note_count=len(notes),
+        file_size=file_size
+    )
+
+
+@app.get("/api/notes/{note_id}/export/{fmt}")
+def export_single_note(
+    note_id: int,
+    fmt: str,
+    include_tags: bool = Query(True),
+    include_metadata: bool = Query(True),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    fmt = fmt.lower()
+    if fmt not in ("md", "txt"):
+        raise HTTPException(status_code=400, detail="不支持的导出格式，仅支持 md 和 txt")
+
+    note = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
+        NoteModel.id == note_id,
+        NoteModel.user_id == current_user.id
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+
+    if fmt == "md":
+        content = note_to_markdown(note, include_tags, include_metadata)
+        media_type = "text/markdown"
+        ext = "md"
+    else:
+        content = note_to_txt(note, include_tags, include_metadata)
+        media_type = "text/plain"
+        ext = "txt"
+
+    filename = f"{sanitize_filename(note.title or 'note')}.{ext}"
+    encoded_filename = filename.encode('utf-8').decode('latin-1')
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+    }
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers=headers
+    )
+
+
+@app.get("/api/exports/download/{filename}")
+def download_export_file(
+    filename: str,
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    file_path = EXPORT_DIR / filename
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
+
+    if filename.endswith(".md"):
+        media_type = "text/markdown"
+    elif filename.endswith(".txt"):
+        media_type = "text/plain"
+    else:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type=media_type
     )

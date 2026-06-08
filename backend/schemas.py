@@ -199,3 +199,18 @@ class DocumentPreviewResponse(BaseModel):
     headers: Optional[List[str]] = None
     total_rows: Optional[int] = None
     total_columns: Optional[int] = None
+
+
+class NoteExportRequest(BaseModel):
+    note_ids: Optional[List[int]] = None
+    format: str = "md"
+    include_tags: bool = True
+    include_metadata: bool = True
+
+
+class NoteExportResponse(BaseModel):
+    message: str
+    filename: str
+    download_url: str
+    note_count: int
+    file_size: int

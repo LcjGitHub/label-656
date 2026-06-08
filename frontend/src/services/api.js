@@ -132,6 +132,31 @@ export const noteApi = {
   removeTag: (noteId, tagId) => {
     return api.delete(`/notes/${noteId}/tags/${tagId}`)
   },
+
+  exportNotes: (noteIds, format, includeTags = true, includeMetadata = true) => {
+    return api.post('/notes/export', {
+      note_ids: noteIds,
+      format,
+      include_tags: includeTags,
+      include_metadata: includeMetadata
+    })
+  },
+
+  exportSingleNote: (noteId, format, includeTags = true, includeMetadata = true) => {
+    return api.get(`/notes/${noteId}/export/${format}`, {
+      params: {
+        include_tags: includeTags,
+        include_metadata: includeMetadata
+      },
+      responseType: 'blob'
+    })
+  },
+
+  downloadExport: (filename) => {
+    return api.get(`/exports/download/${filename}`, {
+      responseType: 'blob'
+    })
+  },
 }
 
 export const tagApi = {

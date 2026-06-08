@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { noteApi } from '../services/api.js'
 
 const escapeRegExp = (string) => {
@@ -13,6 +13,17 @@ const getContrastColor = (hexColor) => {
   return brightness > 128 ? '#000000' : '#ffffff'
 }
 
+const triggerDownload = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+}
+
 const NoteCard = ({
   note,
   searchKeyword,
@@ -22,6 +33,8 @@ const NoteCard = ({
   onTagClick,
   onFavoriteToggle,
   onPinToggle,
+  onExportSuccess,
+  onExportError,
   selectable = false,
   selected = false,
   onSelect,
@@ -29,6 +42,54 @@ const NoteCard = ({
 }) => {
   const [showPinPriority, setShowPinPriority] = useState(false)
   const [pinPriority, setPinPriority] = useState(note.pin_priority || 0)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportFormat, setExportFormat] = useState('md')
+  const [exportIncludeTags, setExportIncludeTags] = useState(true)
+  const [exportIncludeMetadata, setExportIncludeMetadata] = useState(true)
+  const exportMenuRef = useRef(null)
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+        setShowExportMenu(false)
+      }
+    }
+    if (showExportMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showExportMenu])
+
+  const handleExport = async () => {
+    try {
+      setExporting(true)
+      const response = await noteApi.exportSingleNote(note.id, exportFormat, exportIncludeTags, exportIncludeMetadata)
+      const ext = exportFormat
+      const safeTitle = (note.title || 'note').replace(/[<>:"/\\|?*]/g, '_').slice(0, 100)
+      const filename = `${safeTitle}.${ext}`
+      triggerDownload(response.data, filename)
+      setShowExportMenu(false)
+      if (onExportSuccess) {
+        onExportSuccess(`成功导出笔记：${note.title || '无标题'}`)
+      }
+    } catch (err) {
+      console.error('Error exporting note:', err)
+      if (onExportError) {
+        const msg = err.response?.data?.detail || '导出失败，请稍后重试'
+        onExportError(msg)
+      }
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleExportClick = (e) => {
+    e.stopPropagation()
+    setShowExportMenu(!showExportMenu)
+  }
 
   const formatDate = (dateString) => {
     if (!dateString) return ''
@@ -207,6 +268,82 @@ const NoteCard = ({
                   </button>
                   <button className="btn btn-primary btn-tiny" onClick={handleConfirmPin}>
                     确定
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="export-action-wrapper" ref={exportMenuRef}>
+            <button
+              className="btn btn-export"
+              onClick={handleExportClick}
+              title="导出笔记"
+              disabled={exporting}
+            >
+              {exporting ? '导出中...' : '📤 导出'}
+            </button>
+            {showExportMenu && (
+              <div className="export-menu-popup" onClick={(e) => e.stopPropagation()}>
+                <div className="export-menu-title">导出设置</div>
+
+                <div className="export-menu-section">
+                  <div className="export-menu-label">导出格式</div>
+                  <div className="export-format-options">
+                    <label className={`export-format-option ${exportFormat === 'md' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name="exportFormat"
+                        value="md"
+                        checked={exportFormat === 'md'}
+                        onChange={(e) => setExportFormat(e.target.value)}
+                      />
+                      <span>Markdown (.md)</span>
+                    </label>
+                    <label className={`export-format-option ${exportFormat === 'txt' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name="exportFormat"
+                        value="txt"
+                        checked={exportFormat === 'txt'}
+                        onChange={(e) => setExportFormat(e.target.value)}
+                      />
+                      <span>纯文本 (.txt)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="export-menu-section">
+                  <label className="export-checkbox-option">
+                    <input
+                      type="checkbox"
+                      checked={exportIncludeTags}
+                      onChange={(e) => setExportIncludeTags(e.target.checked)}
+                    />
+                    <span>包含标签</span>
+                  </label>
+                  <label className="export-checkbox-option">
+                    <input
+                      type="checkbox"
+                      checked={exportIncludeMetadata}
+                      onChange={(e) => setExportIncludeMetadata(e.target.checked)}
+                    />
+                    <span>包含元数据（创建时间、收藏状态等）</span>
+                  </label>
+                </div>
+
+                <div className="export-menu-actions">
+                  <button
+                    className="btn btn-secondary btn-tiny"
+                    onClick={(e) => { e.stopPropagation(); setShowExportMenu(false); }}
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="btn btn-primary btn-tiny"
+                    onClick={(e) => { e.stopPropagation(); handleExport(); }}
+                    disabled={exporting}
+                  >
+                    {exporting ? '导出中...' : '确认导出'}
                   </button>
                 </div>
               </div>

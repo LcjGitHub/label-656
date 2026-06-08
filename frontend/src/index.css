@@ -1809,3 +1809,162 @@ body {
     margin-top: 0;
   }
 }
+
+.btn-success {
+  background-color: #27ae60;
+  color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+  background-color: #229954;
+}
+
+.btn-export {
+  background-color: #8e44ad;
+  color: white;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.btn-export:hover:not(:disabled) {
+  background-color: #7d3c98;
+}
+
+.export-action-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.export-menu-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 15px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 280px;
+  margin-top: 8px;
+}
+
+.export-menu-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+  font-size: 0.95rem;
+  color: #2c3e50;
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 8px;
+}
+
+.export-menu-section {
+  margin-bottom: 15px;
+}
+
+.export-menu-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.export-format-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.export-format-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.export-format-option:hover {
+  border-color: #8e44ad;
+  background: #faf5fc;
+}
+
+.export-format-option.active {
+  border-color: #8e44ad;
+  background: #f4ecf7;
+  color: #8e44ad;
+  font-weight: 500;
+}
+
+.export-format-option input[type="radio"] {
+  cursor: pointer;
+  accent-color: #8e44ad;
+  margin: 0;
+}
+
+.export-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.export-checkbox-option:hover {
+  color: #2c3e50;
+}
+
+.export-checkbox-option input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #8e44ad;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.export-menu-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 15px;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.export-progress {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.export-progress .progress-bar {
+  margin-bottom: 8px;
+}
+
+.export-progress-text {
+  font-size: 0.85rem;
+  color: #7f8c8d;
+  text-align: center;
+  margin: 0;
+}
+
+.modal-content.small-modal {
+  max-width: 420px;
+}
+
+@media (max-width: 768px) {
+  .export-menu-popup {
+    position: fixed;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%);
+    min-width: 280px;
+    margin-top: 0;
+  }
+}

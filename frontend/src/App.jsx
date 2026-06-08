@@ -1,10 +1,21 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import NoteCard from './components/NoteCard.jsx'
 import NoteModal from './components/NoteModal.jsx'
 import TagManager from './components/TagManager.jsx'
 import { noteApi, tagApi } from './services/api.js'
 import { useAuth } from './context/AuthContext.jsx'
+
+const triggerDownload = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+}
 
 function App() {
   const [notes, setNotes] = useState([])
@@ -28,6 +39,16 @@ function App() {
   const [selectMode, setSelectMode] = useState(false)
   const [showBatchPinPriority, setShowBatchPinPriority] = useState(false)
   const [batchPinPriority, setBatchPinPriority] = useState(0)
+
+  const [successMessage, setSuccessMessage] = useState('')
+  const [showBatchExportModal, setShowBatchExportModal] = useState(false)
+  const [batchExportFormat, setBatchExportFormat] = useState('md')
+  const [batchExportIncludeTags, setBatchExportIncludeTags] = useState(true)
+  const [batchExportIncludeMetadata, setBatchExportIncludeMetadata] = useState(true)
+  const [batchExporting, setBatchExporting] = useState(false)
+  const [batchExportProgress, setBatchExportProgress] = useState(0)
+  const [exportAll, setExportAll] = useState(false)
+  const batchExportModalRef = useRef(null)
 
   const fetchAllNotes = async () => {
     try {
@@ -445,6 +466,84 @@ function App() {
     setSelectedNoteIds([])
   }
 
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => {
+        setSuccessMessage('')
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [successMessage])
+
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        setError('')
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [error])
+
+  const handleExportSuccess = (message) => {
+    setSuccessMessage(message)
+  }
+
+  const handleExportError = (message) => {
+    setError(message)
+  }
+
+  const handleOpenBatchExport = () => {
+    setBatchExportFormat('md')
+    setBatchExportIncludeTags(true)
+    setBatchExportIncludeMetadata(true)
+    setBatchExportProgress(0)
+    setExportAll(selectedNoteIds.length === 0)
+    setShowBatchExportModal(true)
+  }
+
+  const handleBatchExport = async () => {
+    try {
+      setBatchExporting(true)
+      setBatchExportProgress(20)
+      setError('')
+
+      const noteIds = exportAll ? null : selectedNoteIds
+      const count = exportAll ? allNotes.length : selectedNoteIds.length
+
+      const response = await noteApi.exportNotes(
+        noteIds,
+        batchExportFormat,
+        batchExportIncludeTags,
+        batchExportIncludeMetadata
+      )
+
+      setBatchExportProgress(60)
+
+      const { filename, download_url } = response.data
+
+      const downloadResponse = await noteApi.downloadExport(
+        download_url.split('/').pop()
+      )
+
+      setBatchExportProgress(90)
+
+      triggerDownload(downloadResponse.data, filename)
+
+      setBatchExportProgress(100)
+      setSuccessMessage(`成功导出 ${response.data.note_count} 条笔记`)
+      setShowBatchExportModal(false)
+      setSelectedNoteIds([])
+      setSelectMode(false)
+    } catch (err) {
+      console.error('Error batch exporting notes:', err)
+      const msg = err.response?.data?.detail || '批量导出失败，请稍后重试'
+      setError(msg)
+    } finally {
+      setBatchExporting(false)
+      setTimeout(() => setBatchExportProgress(0), 500)
+    }
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -479,6 +578,7 @@ function App() {
       </header>
 
       {error && <div className="error-message">{error}</div>}
+      {successMessage && <div className="success-message">{successMessage}</div>}
 
       <div className="view-tabs">
         <button
@@ -607,6 +707,12 @@ function App() {
           >
             💔 批量取消收藏
           </button>
+          <button
+            className="btn btn-success btn-small"
+            onClick={handleOpenBatchExport}
+          >
+            📤 批量导出
+          </button>
 
           {showBatchPinPriority && (
             <div className="modal-overlay" onClick={() => setShowBatchPinPriority(false)}>
@@ -700,6 +806,8 @@ function App() {
               onTagClick={handleTagClick}
               onFavoriteToggle={handleFavoriteToggle}
               onPinToggle={handlePinToggle}
+              onExportSuccess={handleExportSuccess}
+              onExportError={handleExportError}
               selectable={selectMode}
               selected={selectedNoteIds.includes(note.id)}
               onSelect={handleSelectNote}
@@ -723,6 +831,126 @@ function App() {
         onClose={handleTagManagerClose}
         onTagsChange={handleTagsChange}
       />
+
+      {showBatchExportModal && (
+        <div className="modal-overlay" onClick={() => !batchExporting && setShowBatchExportModal(false)}>
+          <div className="modal-content small-modal" ref={batchExportModalRef} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📤 批量导出笔记</h3>
+              <button
+                className="btn-close"
+                onClick={() => !batchExporting && setShowBatchExportModal(false)}
+                disabled={batchExporting}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="export-menu-section">
+                <div className="export-menu-label">导出范围</div>
+                <div className="export-format-options">
+                  <label className={`export-format-option ${!exportAll ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="exportScope"
+                      value="selected"
+                      checked={!exportAll}
+                      onChange={() => setExportAll(false)}
+                      disabled={selectedNoteIds.length === 0}
+                    />
+                    <span>已选择的笔记 ({selectedNoteIds.length} 条)</span>
+                  </label>
+                  <label className={`export-format-option ${exportAll ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="exportScope"
+                      value="all"
+                      checked={exportAll}
+                      onChange={() => setExportAll(true)}
+                    />
+                    <span>全部笔记 ({allNotes.length} 条)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="export-menu-section">
+                <div className="export-menu-label">导出格式</div>
+                <div className="export-format-options">
+                  <label className={`export-format-option ${batchExportFormat === 'md' ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="batchExportFormat"
+                      value="md"
+                      checked={batchExportFormat === 'md'}
+                      onChange={(e) => setBatchExportFormat(e.target.value)}
+                    />
+                    <span>Markdown (.md)</span>
+                  </label>
+                  <label className={`export-format-option ${batchExportFormat === 'txt' ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="batchExportFormat"
+                      value="txt"
+                      checked={batchExportFormat === 'txt'}
+                      onChange={(e) => setBatchExportFormat(e.target.value)}
+                    />
+                    <span>纯文本 (.txt)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="export-menu-section">
+                <label className="export-checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={batchExportIncludeTags}
+                    onChange={(e) => setBatchExportIncludeTags(e.target.checked)}
+                  />
+                  <span>包含标签</span>
+                </label>
+                <label className="export-checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={batchExportIncludeMetadata}
+                    onChange={(e) => setBatchExportIncludeMetadata(e.target.checked)}
+                  />
+                  <span>包含元数据（创建时间、收藏状态等）</span>
+                </label>
+              </div>
+
+              {batchExporting && (
+                <div className="export-progress">
+                  <div className="progress-bar">
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${batchExportProgress}%` }}
+                    />
+                  </div>
+                  <p className="export-progress-text">
+                    导出中... {batchExportProgress}%
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowBatchExportModal(false)}
+                disabled={batchExporting}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleBatchExport}
+                disabled={batchExporting || (!exportAll && selectedNoteIds.length === 0)}
+              >
+                {batchExporting ? '导出中...' : '确认导出'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
