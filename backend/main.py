@@ -43,6 +43,13 @@ from schemas import (
     CommentListResponse, CommentLikeResponse,
     NotificationResponse, NotificationListResponse
 )
+from note_query import NoteQueryBuilder, NoteSortOrder, get_active_note_or_404, get_trash_note_or_404, get_shared_note_or_404
+from exceptions import (
+    NoteNotFoundError, NoteInTrashNotFoundError, TagNotFoundError,
+    FileNotFoundError, CommentNotFoundError, NotificationNotFoundError,
+    ValidationError, ForbiddenError, UnauthorizedError, BadRequestError,
+    NotFoundError, AppException, raise_http
+)
 
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
 TRASH_RETENTION_DAYS = 30
@@ -140,6 +147,8 @@ def run_database_migration():
             Base.metadata.create_all(bind=engine)
             print("Migration: notifications 表已创建")
 
+        _ensure_indexes(inspector, conn)
+
     except Exception as e:
         print(f"Database migration error: {e}")
         conn.rollback()
@@ -147,10 +156,61 @@ def run_database_migration():
         conn.close()
 
 
+def _ensure_indexes(inspector, conn):
+    indexes_to_create = [
+        ("notes", "ix_notes_user_deleted", ["user_id", "deleted_at"]),
+        ("notes", "ix_notes_user_fav_deleted", ["user_id", "is_favorited", "deleted_at"]),
+        ("notes", "ix_notes_user_pin_deleted", ["user_id", "is_pinned", "deleted_at"]),
+        ("notes", "ix_notes_created_at", ["created_at"]),
+        ("notes", "ix_notes_updated_at", ["updated_at"]),
+        ("notes", "ix_notes_user_id", ["user_id"]),
+        ("notes", "ix_notes_is_favorited", ["is_favorited"]),
+        ("notes", "ix_notes_favorited_at", ["favorited_at"]),
+        ("notes", "ix_notes_is_pinned", ["is_pinned"]),
+        ("notes", "ix_notes_pinned_at", ["pinned_at"]),
+        ("notes", "ix_notes_deleted_at", ["deleted_at"]),
+        ("tags", "ix_tags_user_id", ["user_id"]),
+        ("share_views", "ix_share_views_note_id", ["note_id"]),
+        ("files", "ix_files_user_id", ["user_id"]),
+        ("files", "ix_files_file_extension", ["file_extension"]),
+        ("files", "ix_files_uploaded_at", ["uploaded_at"]),
+        ("comments", "ix_comments_note_id", ["note_id"]),
+        ("comments", "ix_comments_user_id", ["user_id"]),
+        ("comments", "ix_comments_parent_id", ["parent_id"]),
+        ("comments", "ix_comments_created_at", ["created_at"]),
+        ("comment_likes", "ix_comment_likes_comment_id", ["comment_id"]),
+        ("comment_likes", "ix_comment_likes_user_id", ["user_id"]),
+        ("notifications", "ix_notifications_user_id", ["user_id"]),
+        ("notifications", "ix_notifications_is_read", ["is_read"]),
+        ("notifications", "ix_notifications_created_at", ["created_at"]),
+    ]
+
+    for table_name, index_name, columns in indexes_to_create:
+        if not inspector.has_table(table_name):
+            continue
+        existing_indexes = [idx["name"] for idx in inspector.get_indexes(table_name)]
+        if index_name not in existing_indexes:
+            cols_sql = ", ".join(f'"{c}"' for c in columns)
+            try:
+                conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}" ({cols_sql})'))
+                conn.commit()
+                print(f"Migration: 索引 {index_name} 已创建")
+            except Exception as e:
+                print(f"Migration: 创建索引 {index_name} 失败: {e}")
+
+
 Base.metadata.create_all(bind=engine)
 run_database_migration()
 
 app = FastAPI(title="笔记管理 API")
+
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -177,11 +237,11 @@ app.add_middleware(
 def register(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(UserModel).filter(UserModel.username == user.username).first()
     if db_user:
-        raise HTTPException(status_code=400, detail="用户名已存在")
+        raise BadRequestError("用户名已存在")
 
     db_user = db.query(UserModel).filter(UserModel.email == user.email).first()
     if db_user:
-        raise HTTPException(status_code=400, detail="邮箱已被注册")
+        raise BadRequestError("邮箱已被注册")
 
     hashed_pw = hash_password(user.password)
     db_user = UserModel(
@@ -200,21 +260,13 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
     user = db.query(UserModel).filter(UserModel.username == user_credentials.username).first()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise UnauthorizedError("用户名或密码错误")
 
     if not verify_password(user_credentials.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise UnauthorizedError("用户名或密码错误")
 
     if not user.is_active:
-        raise HTTPException(status_code=400, detail="用户已被禁用")
+        raise BadRequestError("用户已被禁用")
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -256,7 +308,7 @@ def create_tag(
         TagModel.user_id == current_user.id
     ).first()
     if existing_tag:
-        raise HTTPException(status_code=400, detail="该标签已存在")
+        raise BadRequestError("该标签已存在")
 
     db_tag = TagModel(
         name=tag.name.strip(),
@@ -276,12 +328,7 @@ def update_tag(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_tag = db.query(TagModel).filter(
-        TagModel.id == tag_id,
-        TagModel.user_id == current_user.id
-    ).first()
-    if not db_tag:
-        raise HTTPException(status_code=404, detail="标签不存在")
+    db_tag = get_tag_or_404(db, tag_id, current_user.id)
 
     if tag.name is not None:
         existing_tag = db.query(TagModel).filter(
@@ -290,7 +337,7 @@ def update_tag(
             TagModel.user_id == current_user.id
         ).first()
         if existing_tag:
-            raise HTTPException(status_code=400, detail="该标签名称已存在")
+            raise BadRequestError("该标签名称已存在")
         db_tag.name = tag.name.strip()
 
     if tag.color is not None:
@@ -307,12 +354,7 @@ def delete_tag(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_tag = db.query(TagModel).filter(
-        TagModel.id == tag_id,
-        TagModel.user_id == current_user.id
-    ).first()
-    if not db_tag:
-        raise HTTPException(status_code=404, detail="标签不存在")
+    db_tag = get_tag_or_404(db, tag_id, current_user.id)
 
     db.delete(db_tag)
     db.commit()
@@ -328,36 +370,17 @@ def get_notes(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    from sqlalchemy import func
     cleanup_expired_trash_notes(db)
-    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    )
+    builder = NoteQueryBuilder(db, current_user.id).active_only()
     if search:
-        query = query.filter(
-            (NoteModel.title.contains(search)) |
-            (NoteModel.content_plain.contains(search))
-        )
+        builder.with_search(search)
     if tag_id:
-        tag = db.query(TagModel).filter(
-            TagModel.id == tag_id,
-            TagModel.user_id == current_user.id
-        ).first()
-        if not tag:
-            raise HTTPException(status_code=404, detail="标签不存在")
-        query = query.filter(NoteModel.tags.contains(tag))
+        builder.with_tag(tag_id)
     if only_favorites:
-        query = query.filter(NoteModel.is_favorited == 1)
+        builder.favorites_only()
     if only_pinned:
-        query = query.filter(NoteModel.is_pinned == 1)
-    notes = query.order_by(
-        NoteModel.is_pinned.desc(),
-        NoteModel.pin_priority.desc(),
-        NoteModel.pinned_at.desc().nullslast(),
-        NoteModel.updated_at.desc().nullslast(),
-        NoteModel.created_at.desc()
-    ).all()
+        builder.pinned_only()
+    notes = builder.order_by(NoteSortOrder.DEFAULT).all()
     return notes
 
 
@@ -368,31 +391,13 @@ def get_favorite_notes(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    from sqlalchemy import func
     cleanup_expired_trash_notes(db)
-    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.is_favorited == 1,
-        NoteModel.deleted_at.is_(None)
-    )
+    builder = NoteQueryBuilder(db, current_user.id).active_only().favorites_only()
     if search:
-        query = query.filter(
-            (NoteModel.title.contains(search)) |
-            (NoteModel.content_plain.contains(search))
-        )
+        builder.with_search(search)
     if tag_id:
-        tag = db.query(TagModel).filter(
-            TagModel.id == tag_id,
-            TagModel.user_id == current_user.id
-        ).first()
-        if not tag:
-            raise HTTPException(status_code=404, detail="标签不存在")
-        query = query.filter(NoteModel.tags.contains(tag))
-    notes = query.order_by(
-        NoteModel.favorited_at.desc().nullslast(),
-        NoteModel.updated_at.desc().nullslast(),
-        NoteModel.created_at.desc()
-    ).all()
+        builder.with_tag(tag_id)
+    notes = builder.order_by(NoteSortOrder.FAVORITES).all()
     return notes
 
 
@@ -403,32 +408,13 @@ def get_pinned_notes(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    from sqlalchemy import func
     cleanup_expired_trash_notes(db)
-    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.is_pinned == 1,
-        NoteModel.deleted_at.is_(None)
-    )
+    builder = NoteQueryBuilder(db, current_user.id).active_only().pinned_only()
     if search:
-        query = query.filter(
-            (NoteModel.title.contains(search)) |
-            (NoteModel.content_plain.contains(search))
-        )
+        builder.with_search(search)
     if tag_id:
-        tag = db.query(TagModel).filter(
-            TagModel.id == tag_id,
-            TagModel.user_id == current_user.id
-        ).first()
-        if not tag:
-            raise HTTPException(status_code=404, detail="标签不存在")
-        query = query.filter(NoteModel.tags.contains(tag))
-    notes = query.order_by(
-        NoteModel.pin_priority.desc(),
-        NoteModel.pinned_at.desc().nullslast(),
-        NoteModel.updated_at.desc().nullslast(),
-        NoteModel.created_at.desc()
-    ).all()
+        builder.with_tag(tag_id)
+    notes = builder.order_by(NoteSortOrder.PINNED).all()
     return notes
 
 
@@ -439,20 +425,14 @@ def toggle_note_favorite(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     from sqlalchemy import func
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     db_note.is_favorited = 0 if db_note.is_favorited == 1 else 1
     db_note.favorited_at = func.now() if db_note.is_favorited == 1 else None
 
     db.commit()
     db.refresh(db_note)
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 @app.put("/api/notes/{note_id}/pin", response_model=Note)
@@ -463,13 +443,7 @@ def toggle_note_pin(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     from sqlalchemy import func
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     db_note.is_pinned = 0 if db_note.is_pinned == 1 else 1
     db_note.pinned_at = func.now() if db_note.is_pinned == 1 else None
@@ -478,7 +452,7 @@ def toggle_note_pin(
 
     db.commit()
     db.refresh(db_note)
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 @app.put("/api/notes/batch/favorite", response_model=List[Note])
@@ -489,16 +463,12 @@ def batch_set_favorite(
 ):
     from sqlalchemy import func
     if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要操作的笔记")
+        raise BadRequestError("请选择要操作的笔记")
 
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).all()
+    notes = NoteQueryBuilder(db, current_user.id).active_only().with_note_ids(request.note_ids).all()
 
     if not notes:
-        raise HTTPException(status_code=404, detail="未找到要操作的笔记")
+        raise NoteNotFoundError("未找到要操作的笔记")
 
     for note in notes:
         note.is_favorited = 1 if request.is_favorited else 0
@@ -507,9 +477,12 @@ def batch_set_favorite(
     db.commit()
 
     note_ids = [note.id for note in notes]
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.id.in_(note_ids)
-    ).order_by(NoteModel.favorited_at.desc().nullslast()).all()
+    return (
+        NoteQueryBuilder(db, current_user.id)
+        .with_note_ids(note_ids)
+        .order_by(NoteSortOrder.FAVORITES)
+        .all()
+    )
 
 
 @app.put("/api/notes/batch/pin", response_model=List[Note])
@@ -520,16 +493,12 @@ def batch_set_pin(
 ):
     from sqlalchemy import func
     if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要操作的笔记")
+        raise BadRequestError("请选择要操作的笔记")
 
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).all()
+    notes = NoteQueryBuilder(db, current_user.id).active_only().with_note_ids(request.note_ids).all()
 
     if not notes:
-        raise HTTPException(status_code=404, detail="未找到要操作的笔记")
+        raise NoteNotFoundError("未找到要操作的笔记")
 
     for note in notes:
         note.is_pinned = 1 if request.is_pinned else 0
@@ -540,9 +509,12 @@ def batch_set_pin(
     db.commit()
 
     note_ids = [note.id for note in notes]
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.id.in_(note_ids)
-    ).order_by(NoteModel.pin_priority.desc(), NoteModel.pinned_at.desc().nullslast()).all()
+    return (
+        NoteQueryBuilder(db, current_user.id)
+        .with_note_ids(note_ids)
+        .order_by(NoteSortOrder.PINNED)
+        .all()
+    )
 
 
 @app.put("/api/notes/unpin-all")
@@ -550,11 +522,7 @@ def unpin_all_notes(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    notes = db.query(NoteModel).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.is_pinned == 1,
-        NoteModel.deleted_at.is_(None)
-    ).all()
+    notes = NoteQueryBuilder(db, current_user.id).active_only().pinned_only().all()
 
     if not notes:
         return {"message": "没有置顶的笔记", "unpinned_count": 0}
@@ -576,17 +544,18 @@ def batch_unfavorite_notes(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要取消收藏的笔记")
+        raise BadRequestError("请选择要取消收藏的笔记")
 
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.is_favorited == 1,
-        NoteModel.deleted_at.is_(None)
-    ).all()
+    notes = (
+        NoteQueryBuilder(db, current_user.id)
+        .active_only()
+        .favorites_only()
+        .with_note_ids(request.note_ids)
+        .all()
+    )
 
     if not notes:
-        raise HTTPException(status_code=404, detail="未找到要取消收藏的笔记")
+        raise NoteNotFoundError("未找到要取消收藏的笔记")
 
     for note in notes:
         note.is_favorited = 0
@@ -606,28 +575,11 @@ def get_trash_notes(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     cleanup_expired_trash_notes(db)
-    query = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    )
+    builder = NoteQueryBuilder(db, current_user.id).trash_only()
     if search:
-        query = query.filter(
-            (NoteModel.title.contains(search)) |
-            (NoteModel.content_plain.contains(search))
-        )
-    if deleted_from:
-        try:
-            from_date = datetime.strptime(deleted_from, "%Y-%m-%d")
-            query = query.filter(NoteModel.deleted_at >= from_date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="deleted_from 格式错误，应为 YYYY-MM-DD")
-    if deleted_to:
-        try:
-            to_date = datetime.strptime(deleted_to, "%Y-%m-%d") + timedelta(days=1)
-            query = query.filter(NoteModel.deleted_at < to_date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="deleted_to 格式错误，应为 YYYY-MM-DD")
-    notes = query.order_by(NoteModel.deleted_at.desc()).all()
+        builder.with_search(search)
+    builder.with_deleted_range(deleted_from, deleted_to)
+    notes = builder.order_by(NoteSortOrder.TRASH).all()
     return notes
 
 
@@ -637,10 +589,7 @@ def get_trash_count(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     cleanup_expired_trash_notes(db)
-    count = db.query(NoteModel).filter(
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).count()
+    count = NoteQueryBuilder(db, current_user.id).trash_only().count()
     return {"count": count}
 
 
@@ -651,16 +600,12 @@ def batch_restore_notes(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要恢复的笔记")
+        raise BadRequestError("请选择要恢复的笔记")
 
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).all()
+    notes = NoteQueryBuilder(db, current_user.id).trash_only().with_note_ids(request.note_ids).all()
 
     if not notes:
-        raise HTTPException(status_code=404, detail="未找到要恢复的笔记")
+        raise NoteInTrashNotFoundError("未找到要恢复的笔记")
 
     for note in notes:
         note.deleted_at = None
@@ -676,16 +621,12 @@ def batch_permanent_delete_notes(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     if not request.note_ids:
-        raise HTTPException(status_code=400, detail="请选择要永久删除的笔记")
+        raise BadRequestError("请选择要永久删除的笔记")
 
-    notes = db.query(NoteModel).filter(
-        NoteModel.id.in_(request.note_ids),
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).all()
+    notes = NoteQueryBuilder(db, current_user.id).trash_only().with_note_ids(request.note_ids).all()
 
     if not notes:
-        raise HTTPException(status_code=404, detail="未找到要永久删除的笔记")
+        raise NoteInTrashNotFoundError("未找到要永久删除的笔记")
 
     deleted_count = 0
     for note in notes:
@@ -702,13 +643,7 @@ def get_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    note = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    note = get_active_note_or_404(db, note_id, current_user.id)
     return note
 
 
@@ -760,15 +695,25 @@ def html_to_plain_text(html_content: str) -> str:
 def validate_note_data(title: str = None, content: str = None):
     if title is not None:
         if not title.strip():
-            raise HTTPException(status_code=400, detail="标题不能为空或仅包含空格")
+            raise BadRequestError("标题不能为空或仅包含空格")
         if len(title.strip()) > 200:
-            raise HTTPException(status_code=400, detail="标题长度不能超过200个字符")
+            raise BadRequestError("标题长度不能超过200个字符")
     if content is not None:
         plain_text = html_to_plain_text(content)
         if not plain_text:
-            raise HTTPException(status_code=400, detail="内容不能为空或仅包含空格")
+            raise BadRequestError("内容不能为空或仅包含空格")
         if len(plain_text) > 2000:
-            raise HTTPException(status_code=400, detail="内容长度不能超过2000个字符")
+            raise BadRequestError("内容长度不能超过2000个字符")
+
+
+def get_tag_or_404(db: Session, tag_id: int, user_id: int) -> TagModel:
+    tag = db.query(TagModel).filter(
+        TagModel.id == tag_id,
+        TagModel.user_id == user_id
+    ).first()
+    if not tag:
+        raise TagNotFoundError()
+    return tag
 
 
 @app.post("/api/notes", response_model=Note)
@@ -795,7 +740,7 @@ def create_note(
     db.add(db_note)
     db.commit()
     db.refresh(db_note)
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == db_note.id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(db_note.id).first()
 
 
 @app.put("/api/notes/{note_id}", response_model=Note)
@@ -805,13 +750,7 @@ def update_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     validate_note_data(title=note.title, content=note.content)
 
@@ -830,7 +769,7 @@ def update_note(
 
     db.commit()
     db.refresh(db_note)
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 @app.delete("/api/notes/{note_id}")
@@ -840,13 +779,7 @@ def delete_note(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     from sqlalchemy import func
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     db_note.deleted_at = func.now()
     db.commit()
@@ -859,13 +792,7 @@ def permanent_delete_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="回收站中未找到该笔记")
+    db_note = get_trash_note_or_404(db, note_id, current_user.id)
 
     db.delete(db_note)
     db.commit()
@@ -878,18 +805,12 @@ def restore_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.isnot(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="回收站中未找到该笔记")
+    db_note = get_trash_note_or_404(db, note_id, current_user.id)
 
     db_note.deleted_at = None
     db.commit()
     db.refresh(db_note)
-    restored = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    restored = NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
     return {"message": "笔记已恢复", "note": restored}
 
 
@@ -900,13 +821,7 @@ def add_tags_to_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     tags = db.query(TagModel).filter(
         TagModel.id.in_(request.tag_ids),
@@ -917,7 +832,7 @@ def add_tags_to_note(
             db_note.tags.append(tag)
 
     db.commit()
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 @app.put("/api/notes/{note_id}/tags", response_model=Note)
@@ -927,13 +842,7 @@ def update_note_tags(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     tags = db.query(TagModel).filter(
         TagModel.id.in_(request.tag_ids),
@@ -942,7 +851,7 @@ def update_note_tags(
     db_note.tags = tags
 
     db.commit()
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 @app.delete("/api/notes/{note_id}/tags/{tag_id}", response_model=Note)
@@ -952,26 +861,15 @@ def remove_tag_from_note(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
-    tag = db.query(TagModel).filter(
-        TagModel.id == tag_id,
-        TagModel.user_id == current_user.id
-    ).first()
-    if not tag:
-        raise HTTPException(status_code=404, detail="标签不存在")
+    tag = get_tag_or_404(db, tag_id, current_user.id)
 
     if tag in db_note.tags:
         db_note.tags.remove(tag)
         db.commit()
 
-    return db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(NoteModel.id == note_id).first()
+    return NoteQueryBuilder(db, current_user.id).with_note_id(note_id).first()
 
 
 def get_file_extension(filename: str) -> str:
@@ -992,6 +890,21 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     else:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def get_file_or_404(db: Session, file_id: int, user_id: int) -> FileModel:
+    file = db.query(FileModel).filter(
+        FileModel.id == file_id,
+        FileModel.user_id == user_id
+    ).first()
+    if not file:
+        raise FileNotFoundError()
+    return file
+
+
+def get_file_on_disk_or_404(file: FileModel):
+    if not os.path.exists(file.file_path):
+        raise NotFoundError("文件在服务器上不存在")
 
 
 @app.get("/api/files", response_model=List[FileSchema])
@@ -1077,7 +990,7 @@ async def upload_files(
             db.rollback()
 
     if not uploaded_files and errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
+        raise BadRequestError("; ".join(errors))
 
     message = f"成功上传 {len(uploaded_files)} 个文件"
     if errors:
@@ -1092,13 +1005,7 @@ def get_file_info(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return file
+    return get_file_or_404(db, file_id, current_user.id)
 
 
 @app.get("/api/files/{file_id}/download")
@@ -1107,15 +1014,8 @@ def download_file(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    if not os.path.exists(file.file_path):
-        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+    file = get_file_or_404(db, file_id, current_user.id)
+    get_file_on_disk_or_404(file)
 
     return FileResponse(
         path=file.file_path,
@@ -1130,19 +1030,12 @@ def preview_file(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    if not os.path.exists(file.file_path):
-        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+    file = get_file_or_404(db, file_id, current_user.id)
+    get_file_on_disk_or_404(file)
 
     image_extensions = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
     if file.file_extension not in image_extensions:
-        raise HTTPException(status_code=400, detail="该文件类型不支持预览")
+        raise BadRequestError("该文件类型不支持预览")
 
     return FileResponse(
         path=file.file_path,
@@ -1156,12 +1049,7 @@ def delete_file(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
+    file = get_file_or_404(db, file_id, current_user.id)
 
     try:
         if os.path.exists(file.file_path):
@@ -1182,7 +1070,7 @@ def batch_delete_files(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     if not request.file_ids:
-        raise HTTPException(status_code=400, detail="请选择要删除的文件")
+        raise BadRequestError("请选择要删除的文件")
 
     files = db.query(FileModel).filter(
         FileModel.id.in_(request.file_ids),
@@ -1190,7 +1078,7 @@ def batch_delete_files(
     ).all()
 
     if not files:
-        raise HTTPException(status_code=404, detail="未找到要删除的文件")
+        raise FileNotFoundError("未找到要删除的文件")
 
     deleted_count = 0
     for file in files:
@@ -1214,15 +1102,8 @@ def preview_document(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    if not os.path.exists(file.file_path):
-        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+    file = get_file_or_404(db, file_id, current_user.id)
+    get_file_on_disk_or_404(file)
 
     text_extensions = {"txt", "md", "csv"}
     excel_extensions = {"xls", "xlsx"}
@@ -1277,7 +1158,7 @@ def preview_document(
                     content=content[:100000]
                 )
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"无法读取文件内容: {str(e)}")
+                raise BadRequestError(f"无法读取文件内容: {str(e)}")
 
     elif ext in excel_extensions:
         try:
@@ -1303,12 +1184,11 @@ def preview_document(
         except ImportError:
             raise HTTPException(status_code=500, detail="服务器未安装 Excel 处理库，请联系管理员")
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"无法读取 Excel 文件: {str(e)}")
+            raise BadRequestError(f"无法读取 Excel 文件: {str(e)}")
 
     else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"该文件类型不支持在线预览。支持的类型: txt, md, csv, xls, xlsx"
+        raise BadRequestError(
+            f"该文件类型不支持在线预览。支持的类型: txt, md, csv, xls, xlsx"
         )
 
 
@@ -1318,19 +1198,12 @@ def get_image_blob(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file = db.query(FileModel).filter(
-        FileModel.id == file_id,
-        FileModel.user_id == current_user.id
-    ).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    if not os.path.exists(file.file_path):
-        raise HTTPException(status_code=404, detail="文件在服务器上不存在")
+    file = get_file_or_404(db, file_id, current_user.id)
+    get_file_on_disk_or_404(file)
 
     image_extensions = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
     if file.file_extension not in image_extensions:
-        raise HTTPException(status_code=400, detail="该文件不是图片类型")
+        raise BadRequestError("该文件不是图片类型")
 
     return FileResponse(
         path=file.file_path,
@@ -1576,25 +1449,16 @@ def export_notes(
 ):
     fmt = request.format.lower()
     if fmt not in ("md", "txt"):
-        raise HTTPException(status_code=400, detail="不支持的导出格式，仅支持 md 和 txt")
+        raise BadRequestError("不支持的导出格式，仅支持 md 和 txt")
 
     cleanup_expired_exports(current_user.id)
 
+    builder = NoteQueryBuilder(db, current_user.id).active_only()
     if request.note_ids and len(request.note_ids) > 0:
-        notes = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-            NoteModel.id.in_(request.note_ids),
-            NoteModel.user_id == current_user.id,
-            NoteModel.deleted_at.is_(None)
-        ).order_by(NoteModel.created_at.desc()).all()
-        if not notes:
-            raise HTTPException(status_code=404, detail="未找到要导出的笔记")
-    else:
-        notes = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-            NoteModel.user_id == current_user.id,
-            NoteModel.deleted_at.is_(None)
-        ).order_by(NoteModel.created_at.desc()).all()
-        if not notes:
-            raise HTTPException(status_code=404, detail="没有可导出的笔记")
+        builder.with_note_ids(request.note_ids)
+    notes = builder.order_by(NoteSortOrder.CREATED_DESC).all()
+    if not notes:
+        raise NoteNotFoundError("没有可导出的笔记")
 
     user_dir = get_user_export_dir(current_user.id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1649,15 +1513,9 @@ def export_single_note(
 ):
     fmt = fmt.lower()
     if fmt not in ("md", "txt"):
-        raise HTTPException(status_code=400, detail="不支持的导出格式，仅支持 md 和 txt")
+        raise BadRequestError("不支持的导出格式，仅支持 md 和 txt")
 
-    note = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    note = get_active_note_or_404(db, note_id, current_user.id)
 
     if fmt == "md":
         content = note_to_markdown(note, include_tags, include_metadata)
@@ -1689,7 +1547,7 @@ def download_export_file(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     if user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限访问该导出文件")
+        raise ForbiddenError("无权限访问该导出文件")
 
     cleanup_expired_exports(current_user.id)
 
@@ -1700,10 +1558,10 @@ def download_export_file(
     try:
         file_path.relative_to(user_dir)
     except ValueError:
-        raise HTTPException(status_code=400, detail="非法的文件名")
+        raise BadRequestError("非法的文件名")
 
     if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
+        raise NotFoundError("导出文件不存在或已过期")
 
     if safe_filename.endswith(".md"):
         media_type = "text/markdown"
@@ -1763,13 +1621,7 @@ def enable_or_update_share(
     current_user: UserModel = Depends(get_current_active_user)
 ):
     from sqlalchemy import func
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     if not db_note.share_token:
         db_note.share_token = generate_share_token()
@@ -1778,7 +1630,7 @@ def enable_or_update_share(
 
     if config.password:
         if len(config.password) < 4:
-            raise HTTPException(status_code=400, detail="分享密码长度不能少于4位")
+            raise BadRequestError("分享密码长度不能少于4位")
         db_note.share_password = hash_password(config.password)
 
     if config.expires_days and config.expires_days > 0:
@@ -1809,13 +1661,7 @@ def disable_share(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     db_note.is_shared = 0
     db_note.share_password = None
@@ -1832,13 +1678,7 @@ def get_share_info(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     return NoteShareResponse(
         is_shared=db_note.is_shared,
@@ -1857,13 +1697,7 @@ def get_share_stats(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     recent_views = db.query(ShareViewModel).filter(
         ShareViewModel.note_id == note_id
@@ -1893,16 +1727,10 @@ def get_share_qrcode(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.user_id == current_user.id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
+    db_note = get_active_note_or_404(db, note_id, current_user.id)
 
     if db_note.is_shared != 1 or not db_note.share_token:
-        raise HTTPException(status_code=400, detail="该笔记尚未开启分享")
+        raise BadRequestError("该笔记尚未开启分享")
 
     try:
         import qrcode
@@ -1933,37 +1761,7 @@ def get_share_qrcode(
         raise HTTPException(status_code=500, detail=f"生成二维码失败: {str(e)}")
 
 
-@app.get("/api/public/share/{token}")
-def get_public_note(
-    token: str,
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    db_note = db.query(NoteModel).options(
-        joinedload(NoteModel.tags),
-        joinedload(NoteModel.owner)
-    ).filter(
-        NoteModel.share_token == token,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-
-    if not db_note:
-        raise HTTPException(status_code=404, detail="分享链接不存在")
-
-    if db_note.is_shared != 1:
-        raise HTTPException(status_code=404, detail="该分享已关闭")
-
-    if is_share_expired(db_note):
-        raise HTTPException(status_code=410, detail="该分享链接已过期")
-
-    if db_note.share_password:
-        return {
-            "requires_password": True,
-            "message": "该分享需要访问密码"
-        }
-
-    record_share_view(db, db_note.id, request)
-
+def _build_public_share_response(db_note: NoteModel) -> PublicShareNoteResponse:
     owner = db_note.owner
     return PublicShareNoteResponse(
         id=db_note.id,
@@ -1976,6 +1774,32 @@ def get_public_note(
         owner_name=owner.full_name if owner else None,
         owner_username=owner.username if owner else None
     )
+
+
+def _validate_shared_note(db_note: NoteModel):
+    if db_note.is_shared != 1:
+        raise NotFoundError("该分享已关闭")
+    if is_share_expired(db_note):
+        raise HTTPException(status_code=410, detail="该分享链接已过期")
+
+
+@app.get("/api/public/share/{token}")
+def get_public_note(
+    token: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    db_note = get_shared_note_or_404(db, token)
+    _validate_shared_note(db_note)
+
+    if db_note.share_password:
+        return {
+            "requires_password": True,
+            "message": "该分享需要访问密码"
+        }
+
+    record_share_view(db, db_note.id, request)
+    return _build_public_share_response(db_note)
 
 
 @app.post("/api/public/share/{token}/access")
@@ -1985,54 +1809,17 @@ def access_protected_note(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    db_note = db.query(NoteModel).options(
-        joinedload(NoteModel.tags),
-        joinedload(NoteModel.owner)
-    ).filter(
-        NoteModel.share_token == token,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-
-    if not db_note:
-        raise HTTPException(status_code=404, detail="分享链接不存在")
-
-    if db_note.is_shared != 1:
-        raise HTTPException(status_code=404, detail="该分享已关闭")
-
-    if is_share_expired(db_note):
-        raise HTTPException(status_code=410, detail="该分享链接已过期")
+    db_note = get_shared_note_or_404(db, token)
+    _validate_shared_note(db_note)
 
     if not db_note.share_password:
-        owner = db_note.owner
-        return PublicShareNoteResponse(
-            id=db_note.id,
-            title=db_note.title,
-            content=db_note.content,
-            content_plain=db_note.content_plain,
-            created_at=db_note.created_at,
-            updated_at=db_note.updated_at,
-            tags=db_note.tags,
-            owner_name=owner.full_name if owner else None,
-            owner_username=owner.username if owner else None
-        )
+        return _build_public_share_response(db_note)
 
     if not verify_password(req.password, db_note.share_password):
-        raise HTTPException(status_code=401, detail="访问密码错误")
+        raise UnauthorizedError("访问密码错误")
 
     record_share_view(db, db_note.id, request)
-
-    owner = db_note.owner
-    return PublicShareNoteResponse(
-        id=db_note.id,
-        title=db_note.title,
-        content=db_note.content,
-        content_plain=db_note.content_plain,
-        created_at=db_note.created_at,
-        updated_at=db_note.updated_at,
-        tags=db_note.tags,
-        owner_name=owner.full_name if owner else None,
-        owner_username=owner.username if owner else None
-    )
+    return _build_public_share_response(db_note)
 
 
 def update_note_comment_stats(db: Session, note_id: int):
@@ -2104,20 +1891,51 @@ def build_comment_response(db_comment: CommentModel, current_user_id: int):
     }
 
 
+def get_note_for_comments_or_404(db: Session, note_id: int, user_id: int) -> NoteModel:
+    db_note = db.query(NoteModel).filter(
+        NoteModel.id == note_id,
+        NoteModel.deleted_at.is_(None)
+    ).first()
+    if not db_note:
+        raise NoteNotFoundError()
+    if db_note.user_id != user_id and db_note.is_shared != 1:
+        raise ForbiddenError("无权访问该笔记的评论")
+    return db_note
+
+
+def get_comment_or_404(db: Session, comment_id: int) -> CommentModel:
+    comment = db.query(CommentModel).filter(CommentModel.id == comment_id).first()
+    if not comment:
+        raise CommentNotFoundError()
+    return comment
+
+
+def validate_comment_content(content: str):
+    content = content.strip()
+    if not content:
+        raise BadRequestError("评论内容不能为空")
+    if len(content) > 1000:
+        raise BadRequestError("评论内容不能超过1000个字符")
+    return content
+
+
+def get_notification_or_404(db: Session, notification_id: int, user_id: int) -> NotificationModel:
+    notif = db.query(NotificationModel).filter(
+        NotificationModel.id == notification_id,
+        NotificationModel.user_id == user_id
+    ).first()
+    if not notif:
+        raise NotificationNotFoundError()
+    return notif
+
+
 @app.get("/api/notes/{note_id}/comments", response_model=CommentListResponse)
 def get_note_comments(
     note_id: int,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
-    if db_note.user_id != current_user.id and db_note.is_shared != 1:
-        raise HTTPException(status_code=403, detail="无权访问该笔记的评论")
+    get_note_for_comments_or_404(db, note_id, current_user.id)
 
     comments = db.query(CommentModel).options(
         joinedload(CommentModel.user),
@@ -2143,20 +1961,9 @@ def create_comment(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_note = db.query(NoteModel).filter(
-        NoteModel.id == note_id,
-        NoteModel.deleted_at.is_(None)
-    ).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
-    if db_note.user_id != current_user.id and db_note.is_shared != 1:
-        raise HTTPException(status_code=403, detail="无权评论该笔记")
+    db_note = get_note_for_comments_or_404(db, note_id, current_user.id)
 
-    content = comment_data.content.strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="评论内容不能为空")
-    if len(content) > 1000:
-        raise HTTPException(status_code=400, detail="评论内容不能超过1000个字符")
+    content = validate_comment_content(comment_data.content)
 
     parent_comment = None
     if comment_data.parent_id:
@@ -2165,7 +1972,7 @@ def create_comment(
             CommentModel.note_id == note_id
         ).first()
         if not parent_comment:
-            raise HTTPException(status_code=404, detail="回复的评论不存在")
+            raise CommentNotFoundError("回复的评论不存在")
 
     db_comment = CommentModel(
         note_id=note_id,
@@ -2211,15 +2018,11 @@ def update_comment(
         joinedload(CommentModel.replies).joinedload(CommentModel.likes)
     ).filter(CommentModel.id == comment_id).first()
     if not db_comment:
-        raise HTTPException(status_code=404, detail="评论不存在")
+        raise CommentNotFoundError()
     if db_comment.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="只能编辑自己的评论")
+        raise ForbiddenError("只能编辑自己的评论")
 
-    content = comment_data.content.strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="评论内容不能为空")
-    if len(content) > 1000:
-        raise HTTPException(status_code=400, detail="评论内容不能超过1000个字符")
+    content = validate_comment_content(comment_data.content)
 
     db_comment.content = content
     db.commit()
@@ -2236,15 +2039,13 @@ def delete_comment(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_comment = db.query(CommentModel).filter(CommentModel.id == comment_id).first()
-    if not db_comment:
-        raise HTTPException(status_code=404, detail="评论不存在")
+    db_comment = get_comment_or_404(db, comment_id)
 
     db_note = db.query(NoteModel).filter(NoteModel.id == db_comment.note_id).first()
     is_note_owner = db_note and db_note.user_id == current_user.id
 
     if db_comment.user_id != current_user.id and not is_note_owner:
-        raise HTTPException(status_code=403, detail="无权删除该评论")
+        raise ForbiddenError("无权删除该评论")
 
     note_id = db_comment.note_id
     delete_comment_tree(db, db_comment)
@@ -2265,7 +2066,7 @@ def toggle_comment_like(
         joinedload(CommentModel.likes)
     ).filter(CommentModel.id == comment_id).first()
     if not db_comment:
-        raise HTTPException(status_code=404, detail="评论不存在")
+        raise CommentNotFoundError()
 
     existing_like = db.query(CommentLikeModel).filter(
         CommentLikeModel.comment_id == comment_id,
@@ -2316,12 +2117,7 @@ def mark_notification_read(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    db_notif = db.query(NotificationModel).filter(
-        NotificationModel.id == notification_id,
-        NotificationModel.user_id == current_user.id
-    ).first()
-    if not db_notif:
-        raise HTTPException(status_code=404, detail="通知不存在")
+    db_notif = get_notification_or_404(db, notification_id, current_user.id)
 
     db_notif.is_read = 1
     db.commit()
