@@ -2,6 +2,19 @@ import axios from 'axios'
 
 const API_BASE_URL = '/api'
 
+export const parseBlobError = async (error) => {
+  if (error?.response?.data instanceof Blob && error.response.data.type === 'application/json') {
+    try {
+      const text = await error.response.data.text()
+      const data = JSON.parse(text)
+      return data?.detail || '导出失败，请稍后重试'
+    } catch {
+      return '导出失败，请稍后重试'
+    }
+  }
+  return error?.response?.data?.detail || error?.message || '导出失败，请稍后重试'
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -152,8 +165,8 @@ export const noteApi = {
     })
   },
 
-  downloadExport: (filename) => {
-    return api.get(`/exports/download/${filename}`, {
+  downloadExport: (userId, filename) => {
+    return api.get(`/exports/download/${userId}/${filename}`, {
       responseType: 'blob'
     })
   },

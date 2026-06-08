@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { noteApi } from '../services/api.js'
+import { noteApi, parseBlobError } from '../services/api.js'
 
 const escapeRegExp = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -77,8 +77,8 @@ const NoteCard = ({
       }
     } catch (err) {
       console.error('Error exporting note:', err)
+      const msg = await parseBlobError(err)
       if (onExportError) {
-        const msg = err.response?.data?.detail || '导出失败，请稍后重试'
         onExportError(msg)
       }
     } finally {
@@ -297,7 +297,7 @@ const NoteCard = ({
                         checked={exportFormat === 'md'}
                         onChange={(e) => setExportFormat(e.target.value)}
                       />
-                      <span>Markdown (.md)</span>
+                      <span>Markdown 格式</span>
                     </label>
                     <label className={`export-format-option ${exportFormat === 'txt' ? 'active' : ''}`}>
                       <input
@@ -307,7 +307,7 @@ const NoteCard = ({
                         checked={exportFormat === 'txt'}
                         onChange={(e) => setExportFormat(e.target.value)}
                       />
-                      <span>纯文本 (.txt)</span>
+                      <span>纯文本格式</span>
                     </label>
                   </div>
                 </div>

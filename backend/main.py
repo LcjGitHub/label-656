@@ -9,8 +9,9 @@ import shutil
 import uuid
 import csv
 import io
-import zipfile
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 from database import engine, Base, get_db
 from models import Note as NoteModel, User as UserModel, File as FileModel, Tag as TagModel
@@ -1011,6 +1012,30 @@ def get_image_blob(
 EXPORT_DIR = UPLOAD_DIR / "exports"
 EXPORT_DIR.mkdir(exist_ok=True)
 
+EXPORT_FILE_TTL_SECONDS = 3600
+
+
+def get_user_export_dir(user_id: int) -> Path:
+    user_dir = EXPORT_DIR / f"user_{user_id}"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
+
+def cleanup_expired_exports(user_id: int):
+    user_dir = get_user_export_dir(user_id)
+    now = time.time()
+    try:
+        files = list(user_dir.glob("*"))
+        for f in files:
+            if f.is_file():
+                if now - f.stat().st_mtime > EXPORT_FILE_TTL_SECONDS:
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
 
 def sanitize_filename(filename: str) -> str:
     invalid_chars = '<>:"/\\|?*'
@@ -1019,6 +1044,11 @@ def sanitize_filename(filename: str) -> str:
     filename = filename.strip()
     filename = filename[:100] if len(filename) > 100 else filename
     return filename or "untitled"
+
+
+def encode_filename_header(filename: str) -> str:
+    encoded = quote(filename, safe='')
+    return f"filename*=UTF-8''{encoded}"
 
 
 def format_note_date(dt) -> str:
@@ -1191,6 +1221,8 @@ def export_notes(
     if fmt not in ("md", "txt"):
         raise HTTPException(status_code=400, detail="不支持的导出格式，仅支持 md 和 txt")
 
+    cleanup_expired_exports(current_user.id)
+
     if request.note_ids and len(request.note_ids) > 0:
         notes = db.query(NoteModel).options(joinedload(NoteModel.tags)).filter(
             NoteModel.id.in_(request.note_ids),
@@ -1205,6 +1237,7 @@ def export_notes(
         if not notes:
             raise HTTPException(status_code=404, detail="没有可导出的笔记")
 
+    user_dir = get_user_export_dir(current_user.id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_ext = fmt
 
@@ -1212,7 +1245,7 @@ def export_notes(
         note = notes[0]
         base_name = sanitize_filename(note.title or "note")
         filename = f"{base_name}_{timestamp}.{file_ext}"
-        file_path = EXPORT_DIR / filename
+        file_path = user_dir / filename
 
         if fmt == "md":
             content = note_to_markdown(note, request.include_tags, request.include_metadata)
@@ -1224,7 +1257,7 @@ def export_notes(
     else:
         base_name = f"notes_export_{len(notes)}"
         filename = f"{base_name}_{timestamp}.{file_ext}"
-        file_path = EXPORT_DIR / filename
+        file_path = user_dir / filename
 
         if fmt == "md":
             content = notes_to_single_markdown(notes, request.include_tags, request.include_metadata)
@@ -1235,7 +1268,7 @@ def export_notes(
             f.write(content)
 
     file_size = os.path.getsize(file_path)
-    download_url = f"/api/exports/download/{file_path.name}"
+    download_url = f"/api/exports/download/{current_user.id}/{filename}"
 
     return NoteExportResponse(
         message=f"成功导出 {len(notes)} 条笔记",
@@ -1276,10 +1309,10 @@ def export_single_note(
         ext = "txt"
 
     filename = f"{sanitize_filename(note.title or 'note')}.{ext}"
-    encoded_filename = filename.encode('utf-8').decode('latin-1')
+    content_disposition = f"attachment; {encode_filename_header(filename)}"
 
     headers = {
-        "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+        "Content-Disposition": content_disposition,
     }
 
     return Response(
@@ -1289,24 +1322,41 @@ def export_single_note(
     )
 
 
-@app.get("/api/exports/download/{filename}")
+@app.get("/api/exports/download/{user_id}/{filename}")
 def download_export_file(
+    user_id: int,
     filename: str,
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    file_path = EXPORT_DIR / filename
-    if not os.path.exists(file_path):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限访问该导出文件")
+
+    cleanup_expired_exports(current_user.id)
+
+    user_dir = get_user_export_dir(current_user.id)
+    safe_filename = os.path.basename(filename)
+    file_path = user_dir / safe_filename
+
+    if not file_path.is_file():
         raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
 
-    if filename.endswith(".md"):
+    try:
+        file_path.relative_to(user_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法的文件名")
+
+    if safe_filename.endswith(".md"):
         media_type = "text/markdown"
-    elif filename.endswith(".txt"):
+    elif safe_filename.endswith(".txt"):
         media_type = "text/plain"
     else:
         media_type = "application/octet-stream"
 
+    content_disposition = f"attachment; {encode_filename_header(safe_filename)}"
+
     return FileResponse(
         path=str(file_path),
-        filename=filename,
-        media_type=media_type
+        filename=safe_filename,
+        media_type=media_type,
+        headers={"Content-Disposition": content_disposition}
     )
