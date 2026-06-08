@@ -205,6 +205,18 @@ run_database_migration()
 app = FastAPI(title="笔记管理 API")
 
 
+@app.get("/api/health", tags=["health"])
+def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "unhealthy", "database": "disconnected", "error": str(e)}
+        )
+
+
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
